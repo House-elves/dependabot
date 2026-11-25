@@ -1,0 +1,115 @@
+# A House Elves elf: what Elf Desk needs to install, set up and run the Dependabot elf.
+name: dependabot
+title: Dependabot
+version: 1.0.0
+author: "@phillip-kruger"
+description: Dependabot's PRs in the repos you list, on a tab of their own instead of the GitHub board. Queue the ready ones with a click and a merge queue merges them one at a time, asking Dependabot to rebase each and waiting for its CI.
+main: Dependabot.java
+config: ~/.config/dependabot/config
+tools: [gh]
+
+reads:
+  - The open Dependabot PRs in the repos you list, with their CI, reviews and merge state, through gh as your account. The mvnpm elf's bumps (org.mvnpm, in the repos it checks) are left to it.
+writes:
+  - Its board, its merge queue, the rebases it asked for and what merged lately, in ~/.config/dependabot/.
+  - On GitHub, as your account, only after you click and confirm it in the desk's bar - approving a PR's CI runs, re-running its failed CI jobs, merging a green PR at the head you saw (approving it first when the repo wants a review), closing a PR, and the comment "@dependabot rebase".
+  - The PRs you queue to merge, one at a time per repo and branch, at its refresh (every 10 minutes on weekdays) - it comments "@dependabot rebase" on one that's behind its base, approves one the repo wants a review for, and merges it once its CI passes at that head. Only what you queued; one that fails stops and waits for you.
+
+settings:
+  - key: GITHUB_USER
+    label: GitHub account
+    help: The account it reads, merges and comments as.
+    kind: login
+    default: ${github-user}
+  - key: REPOS
+    label: Repos
+    help: Comma-separated owner/repo whose Dependabot PRs it handles. They leave the GitHub board for this tab.
+    kind: repos
+    default: ""
+
+commands:
+  board:
+    label: Refresh
+    args: [--board]
+  dry-run:
+    label: Read without saving
+    args: [--dry-run]
+
+dry-run: dry-run
+
+# Its tab and dashboard card, drawn by ui/dependabot.js from board/board.json.
+tab:
+  page: ui/dependabot.js
+  card: true
+# Every 10 minutes on weekdays, 07:00 to 19:00: the merge queue moves on at each one.
+refresh:
+  command: board
+  schedule: "Mon..Fri *-*-* 7..19:00; Mon..Fri *-*-* 7..18:10; Mon..Fri *-*-* 7..18:20; Mon..Fri *-*-* 7..18:30; Mon..Fri *-*-* 7..18:40; Mon..Fri *-*-* 7..18:50"
+data: [board, state]
+
+# A PR is owner/repo and its number. Each write waits for your click in the desk's bar.
+actions:
+  approve-ci:
+    label: Approve CI to run
+    args: [--action=approve-ci]
+    confirm: "Approve the workflow runs waiting on {repo}#{pr}, so its CI runs?"
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  ci-report:
+    label: Read what failed in a PR's CI
+    args: [--action=ci-report]
+    ask: false
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  ci-rerun:
+    label: Re-run the failed CI jobs
+    args: [--action=ci-rerun]
+    confirm: "Re-run the failed CI jobs on {repo}#{pr}?"
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  merge:
+    label: Merge a green PR
+    args: [--action=merge]
+    confirm: "Merge {repo}#{pr} on GitHub, as you, at the commit you saw? If the repo wants a review, you approve it first."
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+      headSha: {pattern: '[0-9a-f]{40}', max: 40}
+  queue:
+    label: Queue a PR to merge
+    args: [--action=queue]
+    confirm: "Queue {repo}#{pr} to merge? As you, the queue asks Dependabot to rebase it when it's behind, approves it if the repo wants a review, and merges it once CI passes, after the ones queued before it."
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  queue-ready:
+    label: Queue every ready PR to merge
+    args: [--action=queue-ready]
+    confirm: "Queue every ready bump to merge ({count})? Green, behind or with CI running, not major. As you, the queue merges them one at a time per repo and branch, asking Dependabot to rebase each and waiting for its CI. One that fails stops; the rest go on."
+    params:
+      # For the confirm bar's words: the elf queues what its board says is ready.
+      count: {pattern: '[0-9]{1,3} PRs?', max: 10}
+  unqueue:
+    label: Take a PR off the merge queue
+    args: [--action=unqueue]
+    ask: false
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  dependabot-rebase:
+    label: Ask Dependabot to rebase
+    args: [--action=dependabot-rebase]
+    confirm: "Comment \"@dependabot rebase\" on {repo}#{pr}, as you?"
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  close:
+    label: Close a PR without merging it
+    args: [--action=close]
+    confirm: "Close {repo}#{pr} on GitHub without merging it, as you? Dependabot then skips this version."
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
