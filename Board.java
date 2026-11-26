@@ -134,7 +134,7 @@ final class Board {
 
     /**
      * What the elf keeps per bump, for bumps no longer open (repos that couldn't be read keep theirs): rebases asked
-     * at a head that moved since, stopped queue items, retries and checks.
+     * at a head that moved since, stopped queue items, retries, checks and Later.
      */
     private static void cleanUp(Config config, Map<String, String> heads, List<String> errors) throws IOException {
         java.util.function.Predicate<String> read = key -> errors.stream().noneMatch(x -> x.startsWith(key.substring(0, key.indexOf('#')) + ": "));
@@ -149,6 +149,8 @@ final class Board {
             if (retries.keySet().removeIf(k -> read.test(k) && !heads.containsKey(k))) writeJson(config.retriesPath(), retries);
             Map<String, SafetyCheck.Check> checks = new HashMap<>(SafetyCheck.all(config));
             if (checks.keySet().removeIf(k -> read.test(k) && !heads.containsKey(k))) writeJson(config.checksPath(), checks);
+            Map<String, String> later = new HashMap<>(Later.all(config));
+            if (later.keySet().removeIf(k -> read.test(k) && !heads.containsKey(k))) writeJson(config.laterPath(), later);
             return null;
         });
     }
@@ -172,12 +174,12 @@ final class Board {
 
     static View build(Config config, Instant fetchedAt, List<Bumps.Pr> prs, List<String> errors) {
         return build(config.githubUser, fetchedAt, config.repos, prs, MergeQueue.all(config), MergeQueue.rebasing(config),
-                MergeQueue.merged(config), Tend.retries(config), SafetyCheck.all(config), errors, Instant.now());
+                MergeQueue.merged(config), Tend.retries(config), SafetyCheck.all(config), Later.all(config), errors, Instant.now());
     }
 
     static View build(String login, Instant fetchedAt, List<String> repos, List<Bumps.Pr> prs, List<MergeQueue.Item> queue,
                       Map<String, MergeQueue.Rebase> asked, List<MergeQueue.Merged> merged, Map<String, Tend.Retry> retries,
-                      Map<String, SafetyCheck.Check> checks, List<String> errors, Instant now) {
+                      Map<String, SafetyCheck.Check> checks, Map<String, String> later, List<String> errors, Instant now) {
         Set<String> busy = Tend.busyLanes(queue);
         Map<String, Bumps.Pr> open = new HashMap<>();
         prs.forEach(p -> open.put(p.key(), p));
@@ -196,8 +198,9 @@ final class Board {
             }
             Bumps.Bump bump = Bumps.bump(pr.title());
             SafetyCheck.Check check = SafetyCheck.current(checks, pr);
-            rows.add(new Row(pr, bump, check, Flows.flow(pr, bump, new Flows.Ctx(now, asked.get(pr.key()), q, position,
-                    retries.get(pr.key()), check, busy.contains(pr.lane()))), q));
+            Flows.Flow flow = Flows.flow(pr, bump, new Flows.Ctx(now, asked.get(pr.key()), q, position,
+                    retries.get(pr.key()), check, busy.contains(pr.lane())));
+            rows.add(new Row(pr, bump, check, Later.current(later, pr) ? Flows.later(flow) : flow, q));
         }
         rows.sort(Comparator.comparing((Row x) -> x.pr().updatedAt(), Comparator.nullsLast(Comparator.reverseOrder())));
         return new View(login, fetchedAt, List.copyOf(repos), List.copyOf(rows), shown, merged, List.copyOf(errors));

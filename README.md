@@ -32,6 +32,10 @@ the other bumps into it: they're rebased once it's through.
 - A bump into a maintenance branch (`[2.x] Bump ...`) waits in that branch's line, not main's.
 - In a repo that wants a review before merging, Merge and the queue approve the PR as you first.
 
+**Later.** The zz under a row's icon puts a bump that's ready or needs you aside, in a folded Later section, as on the
+GitHub board. Merge all leaves it out, and the elf still tends it. Any action on it, or Dependabot moving it to a new
+version, brings it back.
+
 The mvnpm elf's bumps (`org.mvnpm`, in the repos it checks) stay on its tab, since it builds and tests them first.
 
 - **Reads:** the open Dependabot PRs in the repos you list, with their CI, reviews and merge state, through `gh` as

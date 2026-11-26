@@ -105,6 +105,26 @@ class FlowsTest {
     }
 
     @Test
+    void putAsideIsLaterUntilANewVersionAndNotForMergeAll() {
+        Bumps.Pr ready = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
+        Bumps.Pr running = new Bumps.Pr(ready.repo(), 2900, ready.title(), ready.url(), ready.author(), ready.headRef(),
+                Prs.SHA2, "main", "main", "PENDING", null, "MERGEABLE", "BLOCKED", false, false, ready.createdAt(), ready.updatedAt());
+        Map<String, SafetyCheck.Check> checks = Map.of(ready.key(), safe(ready), running.key(), safe(running));
+        Board.View v = Board.build("me", Prs.NOW, List.of(ready.repo()), List.of(ready, running), List.of(), Map.of(), List.of(),
+                Map.of(), checks, Map.of(ready.key(), ready.title(), running.key(), running.title()), List.of(), Prs.NOW);
+        Map<Integer, Flows.Flow> by = new java.util.HashMap<>();
+        v.rows().forEach(r -> by.put(r.pr().number(), r.flow()));
+        assertEquals(Flows.LATER, by.get(2813).waiting());
+        assertFalse(by.get(2813).ready());
+        // Only a bump that's yours goes to Later: the elf's carry on.
+        assertEquals(Flows.ELF, by.get(2900).waiting());
+        // Dependabot moved it to another version: it's back.
+        Board.View newer = Board.build("me", Prs.NOW, List.of(ready.repo()), List.of(ready), List.of(), Map.of(), List.of(),
+                Map.of(), checks, Map.of(ready.key(), "Bump org.mongodb:bson from 5.14.0 to 5.14.1"), List.of(), Prs.NOW);
+        assertEquals(Flows.READY, newer.rows().get(0).flow().waiting());
+    }
+
+    @Test
     void queuedIsTheQueuesMoveWithItsPlaceInLine() {
         Bumps.Pr pr = Prs.pr("PENDING", "BLOCKED", "MERGEABLE");
         MergeQueue.Item q = Prs.queued(pr).with(Prs.SHA, Prs.NOW, "CI is running.", null);
@@ -137,7 +157,7 @@ class FlowsTest {
                 a.author(), a.headRef(), Prs.SHA2, "main", "main", "SUCCESS", null, "MERGEABLE", "BEHIND", false, false,
                 a.createdAt(), a.updatedAt());
         Board.View v = Board.build("me", Prs.NOW, List.of(a.repo()), List.of(a, b, c), List.of(Prs.queued(a), Prs.queued(b)),
-                Map.of(), List.of(), Map.of(), Map.of(), List.of(), Prs.NOW);
+                Map.of(), List.of(), Map.of(), Map.of(), Map.of(), List.of(), Prs.NOW);
         Map<Integer, Flows.Flow> by = new java.util.HashMap<>();
         v.rows().forEach(r -> by.put(r.pr().number(), r.flow()));
         // Different branches, different lines: both are next in theirs.

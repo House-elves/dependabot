@@ -13,6 +13,7 @@ const SECTIONS = [
     { id: 'you', title: 'Needs you' },
     { id: 'queue', title: 'Merge queue', hint: 'One at a time per repo and branch, rebasing the next after each merge. It moves on at each refresh.' },
     { id: 'elf', title: 'Being got ready', hint: 'At each refresh, every 10 minutes: it asks Dependabot to rebase, re-runs failed CI, and checks each bump.' },
+    { id: 'later', title: 'Later', fold: true, hint: 'Put aside: Merge all leaves them out. Doing anything with one, or a new version, brings it back.' },
 ];
 
 async function board() {
@@ -50,6 +51,8 @@ function ciChip(pr) {
         case 'SUCCESS': return pr.mergeState === 'CLEAN' || pr.mergeState === 'HAS_HOOKS'
             ? html`<span class="chip ok">CI passed</span>`
             : pr.mergeState === 'BEHIND' ? html`<span class="chip ok">CI passed</span><span class="chip warn">Behind its base</span>`
+            : pr.mergeState === 'BLOCKED' && pr.reviewDecision === 'REVIEW_REQUIRED'
+                ? html`<span class="chip ok">CI passed</span><span class="chip" title="The repo wants an approving review: Merge approves it as you first">Needs a review</span>`
             : html`<span class="chip run" title="GitHub says it can't merge yet">Can't merge yet</span>`;
         case 'FAILURE': case 'ERROR': return html`<span class="chip bad">CI failing</span>`;
         case 'PENDING': case 'EXPECTED': return html`<span class="chip run">${spinner}CI in progress</span>`;
@@ -97,6 +100,7 @@ class DependabotTab extends LitElement {
         _ci: { state: true },
         _ciBusy: { state: true },
         _ciError: { state: true },
+        _laterOpen: { state: true },
     };
 
     static styles = [shared, css`
@@ -123,6 +127,17 @@ class DependabotTab extends LitElement {
         li + li { border-top: 1px solid var(--line); }
         li:hover { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
         li .icon { margin-top: 3px; }
+        .lead { display: grid; justify-items: center; gap: 8px; }
+        /* Later: a quiet zz under the row's icon, on rows that are yours; lit on rows put aside. */
+        button.snooze { width: 22px; height: 22px; margin: 0 -3px; padding: 0; border: 0; border-radius: 6px; background: none;
+            color: var(--muted); opacity: .55; cursor: pointer; display: grid; place-items: center; }
+        button.snooze svg { width: 15px; height: 15px; }
+        li:hover button.snooze, button.snooze:focus-visible { opacity: 1; }
+        button.snooze:hover { color: var(--ink); background: var(--surface-2); }
+        button.snooze.on { opacity: 1; color: var(--accent); }
+        button.fold { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer;
+            display: inline-flex; align-items: baseline; gap: 10px; }
+        button.fold .caret { color: var(--muted); font-size: 12px; }
         .main { min-width: 0; display: grid; gap: 5px; }
         .title { color: var(--ink); font-weight: 500; text-decoration: none; overflow-wrap: anywhere; }
         .title:hover { text-decoration: underline; }
@@ -303,10 +318,13 @@ class DependabotTab extends LitElement {
         return SECTIONS.map(s => {
             const rows = by[s.id];
             if (!rows.length && s.id !== 'ready') return '';
+            const open = !s.fold || this._laterOpen;
+            const head = html`<h2 id="h-${s.id}">${s.title}</h2><span class="n">${rows.length}</span>`;
             return html`<section class=${s.id} aria-labelledby="h-${s.id}">
-                <div class="sec-head"><h2 id="h-${s.id}">${s.title}</h2><span class="n">${rows.length}</span>
-                    ${s.hint ? html`<span class="hint">${s.hint}</span>` : ''}</div>
-                <div class="panel">${rows.length ? html`<ul>${rows.map(r => this._row(r))}</ul>` : html`<p class="empty">${s.empty}</p>`}</div>
+                <div class="sec-head">${s.fold ? html`<button class="fold" aria-expanded=${open ? 'true' : 'false'}
+                        @click=${() => { this._laterOpen = !this._laterOpen; }}><span class="caret">${open ? '▾' : '▸'}</span>${head}</button>` : head}
+                    ${s.hint && open ? html`<span class="hint">${s.hint}</span>` : ''}</div>
+                ${open ? html`<div class="panel">${rows.length ? html`<ul>${rows.map(r => this._row(r))}</ul>` : html`<p class="empty">${s.empty}</p>`}</div>` : ''}
             </section>`;
         });
     }
@@ -323,7 +341,7 @@ class DependabotTab extends LitElement {
     _row(row) {
         const pr = row.pr, f = row.flow;
         return html`<li>
-            ${prIcon(pr)}
+            <div class="lead">${prIcon(pr)}${this._snooze(row)}</div>
             <div class="main">
                 <a class="title" href=${pr.url} target="_blank" rel="noopener">${pr.title}</a>
                 <div class="meta">
@@ -344,6 +362,34 @@ class DependabotTab extends LitElement {
             </div>
             <div class="acts">${this._actions(row)}</div>
         </li>`;
+    }
+
+    /** The zz under the icon, as on the GitHub board: Later for a row that's yours, and back for one put aside. */
+    _snooze(row) {
+        const f = row.flow, pr = row.pr;
+        if (f.waiting !== 'you' && f.waiting !== 'ready' && f.waiting !== 'later') return '';
+        const later = f.waiting === 'later';
+        const busy = this._doing === `${key(pr)} later`;
+        const label = later ? 'Back from Later' : 'Later: put it aside until you do something with it';
+        return html`<button class="snooze ${later ? 'on' : ''}" title=${label} aria-label=${label} aria-pressed=${later ? 'true' : 'false'}
+                ?disabled=${this._doing !== null} @click=${() => this._later(row, !later)}>
+            ${busy ? spinner : html`<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 7h5L2 13h5"/><path d="M9.5 3h4.5l-4.5 5H14"/></svg>`}</button>`;
+    }
+
+    async _later(row, later) {
+        const pr = row.pr;
+        this._doing = `${key(pr)} later`;
+        this._rowError = null;
+        try {
+            await elf.act(later ? 'later' : 'now', { repo: pr.repo, pr: pr.number });
+            await this._load();
+        } catch (e) {
+            if (!e.cancelled) this._rowError = { key: key(pr), text: `${later ? 'Later' : 'Back from Later'}: ${e.message}` };
+        } finally {
+            this._doing = null;
+        }
     }
 
     /** Failing CI is a button, as on the GitHub board: what failed, and what to do about it. */

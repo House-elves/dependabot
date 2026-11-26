@@ -20,7 +20,7 @@ import java.util.concurrent.Callable;
  *
  * The mvnpm elf's bumps (org.mvnpm in its repos) stay on its tab: it builds and tests them before you merge.
  */
-@Command(name = "dependabot", mixinStandardHelpOptions = true, version = "1.1.1",
+@Command(name = "dependabot", mixinStandardHelpOptions = true, version = "1.2.0",
         description = "Dependabot's PRs on a tab of their own, each made ready to merge, and a merge queue for Merge all.")
 public class Dependabot implements Callable<Integer> {
 

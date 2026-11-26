@@ -28,10 +28,14 @@ final class Actions {
             ObjectNode answer = switch (action) {
                 case "merge-all" -> mergeAll(config);
                 case "unqueue" -> unqueue(config, key(config, values));
+                case "later" -> later(config, values, true);
+                case "now" -> later(config, values, false);
                 default -> {
                     String repo = repo(config, values);
                     int number = number(values);
                     GitHub gh = new GitHub(config, repo);
+                    // Doing anything with a bump put aside (but reading its CI) brings it back.
+                    if (!action.equals("ci-report")) Later.put(config, repo + "#" + number, null);
                     yield switch (action) {
                         case "approve-ci" -> approveCi(config, gh, repo, number);
                         case "ci-report" -> {
@@ -54,6 +58,21 @@ final class Actions {
             System.err.println(e.getMessage());
             return 1;
         }
+    }
+
+    /** Later, or back: it doesn't write to GitHub. Put aside at the title the board shows for it. */
+    static ObjectNode later(Config config, JsonNode values, boolean aside) throws IOException {
+        String key = key(config, values);
+        String title = null;
+        if (aside) {
+            Board.View v = Board.read(config.boardPath());
+            title = v == null ? null : v.rows().stream().filter(r -> r.pr().key().equals(key)).map(r -> r.pr().title())
+                    .findFirst().orElse(null);
+            if (title == null) throw new IllegalArgumentException(key + " isn't on the board: Refresh first.");
+        }
+        Later.put(config, key, title);
+        Board.rejoin(config);
+        return Board.MAPPER.createObjectNode().put("later", aside);
     }
 
     private static String repo(Config config, JsonNode values) {

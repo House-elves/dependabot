@@ -3,6 +3,14 @@
 What changed for you in each version of the Dependabot elf, newest first. The desk shows the parts that are new when
 it offers you an update.
 
+## 1.2.0
+
+- New: **Later**. The zz under a row's icon puts a bump that's ready or needs you aside, under a folded Later section,
+  as on the GitHub board. Merge all leaves it out, and the elf still tends it. Doing anything with it, or Dependabot
+  moving it to a new version, brings it back. The zz on a row in Later brings it back too.
+- A bump whose CI passed but that still needs an approving review now says "Needs a review" instead of "Can't merge
+  yet". Merge approves it as you first, so it was always mergeable from the tab.
+
 ## 1.1.1
 
 - The elf no longer approves CI by itself for a run held at a deployment environment, or for a bump that changes the

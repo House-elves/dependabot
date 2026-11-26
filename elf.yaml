@@ -1,7 +1,7 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run the Dependabot elf.
 name: dependabot
 title: Dependabot
-version: 1.1.1
+version: 1.2.0
 author: "@phillip-kruger"
 description: Dependabot's PRs in the repos you list, on a tab of their own instead of the GitHub board, each made ready to merge by itself. It asks Dependabot to rebase a bump that a merge put behind, retries failing CI, and has a coding agent check that the bump is safe. You click Merge, or Merge all.
 main: Dependabot.java
@@ -107,6 +107,20 @@ actions:
     label: Ask Dependabot to rebase
     args: [--action=dependabot-rebase]
     confirm: "Comment \"@dependabot rebase\" on {repo}#{pr}, as you?"
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  later:
+    label: Put a bump aside for later
+    args: [--action=later]
+    ask: false
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  now:
+    label: Bring a bump back from Later
+    args: [--action=now]
+    ask: false
     params:
       repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
       pr: {kind: int}

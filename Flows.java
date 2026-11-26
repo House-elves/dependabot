@@ -20,6 +20,9 @@ final class Flows {
      */
     static final String READY = "ready", YOU = "you", QUEUE = "queue", ELF = "elf";
 
+    /** Yours (ready, or needing you), but you put it aside: under Later, and Merge all leaves it out. */
+    static final String LATER = "later";
+
     /**
      * @param steps   the flow's stages, for the row's stepper
      * @param step    the current stage, an index into {@code steps}
@@ -66,6 +69,12 @@ final class Flows {
         Ctx(Instant now) {
             this(now, null, null, 0, null, null, false);
         }
+    }
+
+    /** Put aside: only a flow that's yours moves to Later; the others carry on as they are. */
+    static Flow later(Flow f) {
+        if (!f.waiting().equals(READY) && !f.waiting().equals(YOU)) return f;
+        return new Flow(f.steps(), f.step(), LATER, f.since(), f.say(), f.next(), f.more(), false);
     }
 
     static Flow flow(Bumps.Pr i, Bumps.Bump bump, Ctx c) {
