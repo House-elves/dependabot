@@ -31,15 +31,25 @@ final class SafetyCheck {
     static final String SAFE = "safe", CAREFUL = "careful";
 
     /** The agent's word on a bump at this title. */
-    record Check(String title, String verdict, String reason, Instant at) {
+    /**
+     * @param workflows the bump changes .github/workflows or .github/actions; null in checks made before 1.1.1,
+     *                  which are asked again
+     */
+    record Check(String title, String verdict, String reason, Instant at, Boolean workflows) {
+
+        Check(String title, String verdict, String reason, Instant at) {
+            this(title, verdict, reason, at, false);
+        }
 
         boolean safe() { return SAFE.equals(verdict); }
+
+        Check withWorkflows(boolean w) { return new Check(title, verdict, reason, at, w); }
     }
 
     /** The check for the bump as it is, or null when it wasn't checked at this version. */
     static Check current(Map<String, Check> checks, Bumps.Pr pr) {
         Check c = checks.get(pr.key());
-        return c != null && pr.title().equals(c.title()) ? c : null;
+        return c != null && pr.title().equals(c.title()) && c.workflows() != null ? c : null;
     }
 
     static Map<String, Check> all(Config config) {
@@ -64,11 +74,12 @@ final class SafetyCheck {
 
     /** Reads the bump's description and diff from GitHub and asks the agent. Null when the agent didn't answer. */
     static Check ask(GitHub gh, Bumps.Pr pr) throws IOException {
-        String prompt = prompt(pr, gh.description(pr.number()), gh.files(pr.number()));
+        JsonNode files = gh.files(pr.number());
+        String prompt = prompt(pr, gh.description(pr.number()), files);
         String answer = Claude.ask(prompt, 4);
         Check c = parse(pr.title(), answer, Instant.now());
         if (c == null) System.err.println("The coding agent's answer on " + pr.key() + " wasn't a verdict");
-        return c;
+        return c == null ? null : c.withWorkflows(changesWorkflows(files));
     }
 
     static String prompt(Bumps.Pr pr, String body, JsonNode files) {
@@ -121,6 +132,16 @@ final class SafetyCheck {
         } catch (IOException e) {
             return null;
         }
+    }
+
+    /** Any changed file (or a renamed one's old name) under .github/workflows or .github/actions. */
+    static boolean changesWorkflows(JsonNode files) {
+        for (JsonNode f : files) {
+            for (String name : new String[] {f.path("filename").asText(""), f.path("previous_filename").asText("")}) {
+                if (name.startsWith(".github/workflows/") || name.startsWith(".github/actions/")) return true;
+            }
+        }
+        return false;
     }
 
     private static String cut(String s, int max) {

@@ -100,9 +100,15 @@ final class MergeQueue {
             }
             return new Step(Do.WAIT, "Waiting for Dependabot's rebase.");
         }
+        if (Bumps.AWAITING_DEPLOYMENT.equals(pr.ci())) {
+            return new Step(Do.STOP, "CI waits at a deployment environment: approving that is yours.");
+        }
         if (Bumps.AWAITING_APPROVAL.equals(pr.ci())) {
-            if (check != null && check.safe()) return new Step(Do.APPROVE_CI, "The safety check says safe: approved its CI runs.");
+            if (Tend.approvesItself(pr, check)) return new Step(Do.APPROVE_CI, "The safety check says safe: approved its CI runs.");
             if (check == null) return new Step(Do.WAIT, "CI waits for approval: approved once the safety check says safe.");
+            if (Bumps.touchesWorkflows(pr, check)) {
+                return new Step(Do.STOP, "CI waits for you to approve its run: the bump changes the workflows it runs.");
+            }
             return new Step(Do.STOP, "CI waits for you to approve its run: the safety check says to look first"
                     + (check.reason() == null ? "." : ": " + check.reason()));
         }

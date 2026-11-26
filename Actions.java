@@ -91,16 +91,21 @@ final class Actions {
 
     static ObjectNode approveCi(Config config, GitHub gh, String repo, int number) throws IOException {
         Pull p = pull(gh, repo, number);
-        int n = approveRuns(gh, repo, p.node());
+        int n = approveRuns(gh, repo, p.node(), false);
         if (n == 0) throw new IllegalStateException("No workflow runs on " + repo + "#" + number + " wait for approval.");
         System.out.println("Approved " + n + " workflow run(s) on " + repo + "#" + number);
         Board.update(config, prs -> prs.stream().map(x -> x.key().equals(p.pr().key()) ? x.withCi("PENDING") : x).toList());
         return Board.MAPPER.createObjectNode().put("approved", n);
     }
 
-    /** Approves the workflow runs waiting on the PR's head (a GraphQL pullRequest node). How many it approved. */
-    static int approveRuns(GitHub gh, String repo, JsonNode node) throws IOException {
+    /**
+     * Approves the workflow runs waiting on the PR's head (a GraphQL pullRequest node). How many it approved.
+     *
+     * @param plainOnly only runs held for a maintainer, none held at a deployment environment (the elf's own approvals)
+     */
+    static int approveRuns(GitHub gh, String repo, JsonNode node, boolean plainOnly) throws IOException {
         List<Bumps.Approval> runs = Bumps.awaitingApproval(node.path("commits").path("nodes").path(0).path("commit"));
+        if (plainOnly) runs = runs.stream().filter(r -> r.environments().isEmpty()).toList();
         for (Bumps.Approval run : runs) {
             if (run.environments().isEmpty()) {
                 gh.write("POST", "/repos/" + repo + "/actions/runs/" + run.run() + "/approve", Board.MAPPER.createObjectNode());

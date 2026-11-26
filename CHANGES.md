@@ -3,6 +3,14 @@
 What changed for you in each version of the Dependabot elf, newest first. The desk shows the parts that are new when
 it offers you an update.
 
+## 1.1.1
+
+- The elf no longer approves CI by itself for a run held at a deployment environment, or for a bump that changes the
+  workflows (GitHub Actions bumps, or any bump touching `.github/workflows` or `.github/actions`). Those show under
+  **Needs you** with Approve CI run, and the merge queue stops for them. Plain held runs of bumps checked safe are
+  still approved by the elf.
+- Bumps checked before this version are checked again once, to note whether they change the workflows.
+
 ## 1.1.0
 
 - The elf now gets every bump ready to merge by itself, at each refresh. It asks Dependabot to rebase a bump that's

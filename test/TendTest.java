@@ -56,6 +56,45 @@ class TendTest {
     }
 
     @Test
+    void runsAtADeploymentEnvironmentOrThatChangeTheWorkflowsAreNeverApprovedByTheElf() {
+        Bumps.Pr atEnv = Prs.pr(Bumps.AWAITING_DEPLOYMENT, "BLOCKED", "MERGEABLE");
+        SafetyCheck.Check safe = new SafetyCheck.Check(atEnv.title(), "safe", "A patch.", Prs.NOW);
+        assertEquals(Tend.Do.NOTHING, Tend.next(atEnv, null, null, false, safe).what());
+
+        Bumps.Pr held = Prs.pr(Bumps.AWAITING_APPROVAL, "BLOCKED", "MERGEABLE");
+        Bumps.Pr action = Prs.onBranch(held, "dependabot/github_actions/actions/checkout-6");
+        assertEquals(Tend.Do.NOTHING, Tend.next(action, null, null, false, safe).what());
+        // A Maven bump whose diff touches the workflows too.
+        assertEquals(Tend.Do.NOTHING, Tend.next(held, null, null, false, safe.withWorkflows(true)).what());
+        assertEquals(Tend.Do.APPROVE_CI, Tend.next(held, null, null, false, safe.withWorkflows(false)).what());
+    }
+
+    @Test
+    void theCheckNotesWhenTheBumpChangesTheWorkflowsAndOldChecksAreAskedAgain() throws Exception {
+        com.fasterxml.jackson.databind.JsonNode maven = Board.MAPPER.readTree("[{\"filename\":\"pom.xml\"}]");
+        com.fasterxml.jackson.databind.JsonNode ci = Board.MAPPER.readTree(
+                "[{\"filename\":\"pom.xml\"},{\"filename\":\".github/workflows/build.yml\"}]");
+        com.fasterxml.jackson.databind.JsonNode moved = Board.MAPPER.readTree(
+                "[{\"filename\":\"x.yml\",\"previous_filename\":\".github/actions/setup/action.yml\"}]");
+        assertFalse(SafetyCheck.changesWorkflows(maven));
+        assertTrue(SafetyCheck.changesWorkflows(ci));
+        assertTrue(SafetyCheck.changesWorkflows(moved));
+
+        Bumps.Pr pr = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
+        SafetyCheck.Check before = new SafetyCheck.Check(pr.title(), "safe", "A patch.", Prs.NOW, null);
+        assertNull(SafetyCheck.current(java.util.Map.of(pr.key(), before), pr));
+        assertEquals(before.withWorkflows(false), SafetyCheck.current(java.util.Map.of(pr.key(), before.withWorkflows(false)), pr));
+    }
+
+    @Test
+    void heldAtAnEnvironmentWinsOverAPlainHeldRun() {
+        assertEquals("SUCCESS", Bumps.held(java.util.List.of(), "SUCCESS"));
+        assertEquals(Bumps.AWAITING_APPROVAL, Bumps.held(java.util.List.of(new Bumps.Approval(1, java.util.List.of())), "PENDING"));
+        assertEquals(Bumps.AWAITING_DEPLOYMENT, Bumps.held(java.util.List.of(new Bumps.Approval(1, java.util.List.of()),
+                new Bumps.Approval(2, java.util.List.of(7L))), "PENDING"));
+    }
+
+    @Test
     void greenRunningOrADraftIsLeftAlone() {
         assertEquals(Tend.Do.NOTHING, next(Prs.pr("SUCCESS", "CLEAN", "MERGEABLE"), null, null, false));
         assertEquals(Tend.Do.NOTHING, next(Prs.pr("PENDING", "BLOCKED", "MERGEABLE"), null, null, false));

@@ -54,6 +54,7 @@ function ciChip(pr) {
         case 'FAILURE': case 'ERROR': return html`<span class="chip bad">CI failing</span>`;
         case 'PENDING': case 'EXPECTED': return html`<span class="chip run">${spinner}CI in progress</span>`;
         case 'AWAITING_APPROVAL': return html`<span class="chip warn">CI needs approval</span>`;
+        case 'AWAITING_DEPLOYMENT': return html`<span class="chip warn" title="Held at a deployment environment">CI needs approval</span>`;
         default: return html`<span class="chip">No CI yet</span>`;
     }
 }

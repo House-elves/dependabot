@@ -110,9 +110,20 @@ final class Flows {
             return flow(0, ELF, i.updatedAt(), c.laneBusy() ? "Behind its base: rebased once the merge queue is through."
                     : "Behind its base: the elf asks Dependabot to rebase it.", null, List.of(CLOSE));
         }
+        if (Bumps.AWAITING_DEPLOYMENT.equals(i.ci())) {
+            return flow(1, YOU, i.updatedAt(), "CI waits at a deployment environment: approving that hands the job its secrets, "
+                    + "so it's yours.", APPROVE_CI, List.of(CLOSE));
+        }
         if (Bumps.AWAITING_APPROVAL.equals(i.ci())) {
-            // Approved by the elf only once the safety check says safe.
+            // Approved by the elf only once the safety check says safe, and never when it changes the workflows.
             SafetyCheck.Check check = c.check();
+            if (Bumps.touchesWorkflows(i, check)) {
+                String said = check == null ? "" : check.safe() ? " The safety check says safe"
+                        + (check.reason() == null ? "." : ": " + check.reason()) : " The safety check says to look first"
+                        + (check.reason() == null ? "." : ": " + check.reason());
+                return flow(1, YOU, i.updatedAt(), "CI waits for your approval: the bump changes the workflows that run."
+                        + said, APPROVE_CI, check == null ? List.of(CLOSE) : List.of(RECHECK, CLOSE));
+            }
             if (check == null) {
                 return flow(1, ELF, i.updatedAt(), "CI waits for approval: the elf approves it once the safety check says safe.",
                         null, List.of(APPROVE_CI, CLOSE));

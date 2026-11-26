@@ -14,8 +14,10 @@ you click **Merge**, or **Merge all**. It never merges by itself.
   fix on the base. Failing after that, it's yours.
 - A coding agent reads the bump's release notes, changelog and diff, and says whether it's safe to merge once CI passes
   or that you should look first, and why. Once per bump and version.
-- CI waiting for approval (a run held for a maintainer, or at a deployment environment): it approves the runs, as
-  you, only once the check said the bump is safe. When the check says to look first, approving is yours.
+- CI waiting for approval (a run held for a maintainer): it approves the runs, as you, only once the check said the
+  bump is safe. When the check says to look first, approving is yours. A run held at a deployment environment, and a
+  bump that changes `.github/workflows` or `.github/actions` (GitHub Actions bumps), are always yours to approve:
+  approving those hands the job secrets or runs the new code, and the check reads text the dependency's authors wrote.
 
 A bump is **Ready to merge** when it's up to date, its CI passed and the check says it's safe. One the check wants you
 to look at, or that the elf can't get ready alone (CI still failing, CI waiting for your approval, a rebase Dependabot

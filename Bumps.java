@@ -20,6 +20,8 @@ final class Bumps {
 
     /** CI waits for you to approve its workflow runs (a fork's, or one held at a deployment environment you review). */
     static final String AWAITING_APPROVAL = "AWAITING_APPROVAL";
+    /** A run held at a deployment environment you review: approving it hands that job the environment's secrets. */
+    static final String AWAITING_DEPLOYMENT = "AWAITING_DEPLOYMENT";
 
     static final Set<String> RUNNING_CHECKS = Set.of("QUEUED", "IN_PROGRESS", "PENDING", "WAITING", "REQUESTED");
     static final Set<String> PASSED = Set.of("SUCCESS", "NEUTRAL", "SKIPPED");
@@ -30,7 +32,8 @@ final class Bumps {
     /**
      * @param base           the branch it merges into
      * @param defaultBranch  the repo's default branch: a bump into another one (2.x) says so on its row
-     * @param ci             SUCCESS, FAILURE, ERROR, PENDING, EXPECTED, AWAITING_APPROVAL, or null when no checks ran
+     * @param ci             SUCCESS, FAILURE, ERROR, PENDING, EXPECTED, AWAITING_APPROVAL,
+     *                       AWAITING_DEPLOYMENT, or null when no checks ran
      * @param mergeable      MERGEABLE, CONFLICTING or UNKNOWN
      * @param mergeState     GitHub's mergeStateStatus: CLEAN (or HAS_HOOKS) when every required check passed, BEHIND
      *                       when the repo wants it up to date with its base first
@@ -75,7 +78,7 @@ final class Bumps {
         return new Pr(repo, n.path("number").asInt(), n.path("title").asText(), n.path("url").asText(),
                 n.path("author").path("login").asText(""), text(n.path("headRefName")), text(n.path("headRefOid")),
                 text(n.path("baseRefName")), text(n.path("baseRepository").path("defaultBranchRef").path("name")),
-                awaitingApproval(commit).isEmpty() ? commitCi(commit) : AWAITING_APPROVAL, reviewDecision,
+                held(awaitingApproval(commit), commitCi(commit)), reviewDecision,
                 text(n.path("mergeable")), text(n.path("mergeStateStatus")), approved, n.path("isDraft").asBoolean(),
                 instant(n.path("createdAt")), instant(n.path("updatedAt")));
     }
@@ -158,6 +161,23 @@ final class Bumps {
             if (!PASSED.contains(conclusion)) return false;
         }
         return true;
+    }
+
+    /** CI as the row shows it: held at an environment wins over a plain held run, which wins over the checks. */
+    static String held(List<Approval> runs, String ci) {
+        if (runs.isEmpty()) return ci;
+        return runs.stream().anyMatch(r -> !r.environments().isEmpty()) ? AWAITING_DEPLOYMENT : AWAITING_APPROVAL;
+    }
+
+    /** A workflow run waits for someone to approve it, plain or at an environment. */
+    static boolean held(Pr i) {
+        return AWAITING_APPROVAL.equals(i.ci()) || AWAITING_DEPLOYMENT.equals(i.ci());
+    }
+
+    /** Dependabot's GitHub Actions bumps, or a bump that changes the workflows: approving its run runs the new code. */
+    static boolean touchesWorkflows(Pr i, SafetyCheck.Check check) {
+        return (i.headRef() != null && i.headRef().startsWith("dependabot/github_actions/"))
+                || (check != null && Boolean.TRUE.equals(check.workflows()));
     }
 
     /** Workflow runs on this commit waiting for you to approve them: a fork's, or one held at an environment you review. */

@@ -56,6 +56,17 @@ class MergeQueueTest {
     }
 
     @Test
+    void theQueueStopsForRunsOnlyYouApprove() {
+        Bumps.Pr atEnv = Prs.pr(Bumps.AWAITING_DEPLOYMENT, "BLOCKED", "MERGEABLE");
+        assertEquals(MergeQueue.Do.STOP, MergeQueue.next(atEnv, "OPEN", Prs.queued(atEnv), null, false, null, SAFE, NOW).what());
+        Bumps.Pr action = Prs.onBranch(Prs.pr(Bumps.AWAITING_APPROVAL, "BLOCKED", "MERGEABLE"),
+                "dependabot/github_actions/actions/checkout-6");
+        MergeQueue.Step s = MergeQueue.next(action, "OPEN", Prs.queued(action), null, false, null, SAFE, NOW);
+        assertEquals(MergeQueue.Do.STOP, s.what());
+        assertTrue(s.say().contains("workflows"), s.say());
+    }
+
+    @Test
     void onlyWhatTheSafetyCheckSaidIsSafeMerges() {
         Bumps.Pr green = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
         assertEquals(MergeQueue.Do.WAIT, MergeQueue.next(green, "OPEN", Prs.queued(green), null, false, null, null, NOW).what());

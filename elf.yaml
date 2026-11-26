@@ -1,7 +1,7 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run the Dependabot elf.
 name: dependabot
 title: Dependabot
-version: 1.1.0
+version: 1.1.1
 author: "@phillip-kruger"
 description: Dependabot's PRs in the repos you list, on a tab of their own instead of the GitHub board, each made ready to merge by itself. It asks Dependabot to rebase a bump that a merge put behind, retries failing CI, and has a coding agent check that the bump is safe. You click Merge, or Merge all.
 main: Dependabot.java
@@ -15,7 +15,7 @@ reads:
   - Each bump's description (Dependabot's release notes and changelog) and diff, which it gives the coding agent for the safety check, once per bump and version.
 writes:
   - Its board, its merge queue, the rebases and retries it asked for, the safety checks and what merged lately, in ~/.config/dependabot/.
-  - On GitHub, as your account, by itself at its refresh (every 10 minutes on weekdays) - the comment "@dependabot rebase" on a bump that's behind its base or in conflict (once per head); for a bump whose CI fails, re-running its failed jobs once, then that comment once; and approving the CI runs waiting on a bump, only once the safety check said it's safe. Nothing else without your click, and it never merges by itself.
+  - On GitHub, as your account, by itself at its refresh (every 10 minutes on weekdays) - the comment "@dependabot rebase" on a bump that's behind its base or in conflict (once per head); for a bump whose CI fails, re-running its failed jobs once, then that comment once; and approving the CI runs held for a maintainer on a bump, only once the safety check said it's safe (never a run held at a deployment environment, nor a bump that changes the workflows, such as a GitHub Actions bump). Nothing else without your click, and it never merges by itself.
   - On GitHub, as your account, only after you click and confirm it in the desk's bar - approving a PR's CI runs, re-running its failed CI jobs, merging a PR at the head you saw (approving it first when the repo wants a review), closing a PR, and the comment "@dependabot rebase".
   - Merge all, after you click and confirm it - the bumps checked safe go in a merge queue that merges them one at a time per repo and branch at its refresh, asking Dependabot to rebase each after the merge before it, approving one the repo wants a review for, and merging it once its CI passes at that head. One that can't stops and waits for you.
 

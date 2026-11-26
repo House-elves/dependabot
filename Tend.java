@@ -18,9 +18,10 @@ import java.util.stream.Collectors;
  * <li>Behind its base or in conflict, after a merge into it (yours on the tab, on GitHub, or the queue's): it asks
  * Dependabot to rebase it, once per head. Not while the merge queue works through that repo and branch: each of its
  * merges would put the bump behind again, so it's rebased once the queue is through.</li>
- * <li>CI waiting for approval (a workflow run held for a maintainer, or at a deployment environment): it approves the
- * runs, as you, only once the safety check said the bump is safe ({@link SafetyCheck}). Not checked yet, it waits;
- * the check says to look first, it's yours.</li>
+ * <li>CI waiting for approval (a workflow run held for a maintainer): it approves the runs, as you, only once the
+ * safety check said the bump is safe ({@link SafetyCheck}). Not checked yet, it waits; the check says to look first,
+ * it's yours. A run held at a deployment environment, or a bump that changes the workflows (GitHub Actions bumps),
+ * is always yours: {@link #approvesItself}.</li>
  * <li>CI failing: it re-runs the failed jobs once; failing again, it asks Dependabot to rebase it once (a fix on the
  * base comes with it). Failing after that, it's yours: {@link #gaveUp}.</li>
  * </ul>
@@ -52,6 +53,14 @@ final class Tend {
 
     static final Step NOTHING = new Step(Do.NOTHING, null);
 
+    /**
+     * The elf approves a held run by itself only when it's a plain held run (not at a deployment environment), the
+     * bump doesn't change the workflows, and the safety check says safe. Anything else is your click.
+     */
+    static boolean approvesItself(Bumps.Pr pr, SafetyCheck.Check check) {
+        return Bumps.AWAITING_APPROVAL.equals(pr.ci()) && check != null && check.safe() && !Bumps.touchesWorkflows(pr, check);
+    }
+
     /** CI failed and both retries are spent: it's yours. */
     static boolean gaveUp(Bumps.Pr pr, Retry retry) {
         Retry r = retry != null && pr.title().equals(retry.title()) ? retry : null;
@@ -76,9 +85,8 @@ final class Tend {
         if (Bumps.behind(pr)) {
             return laneBusy ? NOTHING : new Step(Do.REBASE, "Behind its base: asked Dependabot to rebase it.");
         }
-        if (Bumps.AWAITING_APPROVAL.equals(pr.ci())) {
-            return check != null && check.safe() ? new Step(Do.APPROVE_CI, "The safety check says safe: approved its CI runs.") : NOTHING;
-        }
+        if (Bumps.held(pr)) return approvesItself(pr, check)
+                ? new Step(Do.APPROVE_CI, "The safety check says safe: approved its CI runs.") : NOTHING;
         if (Bumps.ciFailing(pr)) {
             Retry r = Retry.of(retry, pr);
             if (r.rerunSha() == null) return new Step(Do.RERUN, "CI failed: re-ran its failed jobs.");
@@ -173,7 +181,8 @@ final class Tend {
                 return pr.withCi("PENDING");
             }
             case APPROVE_CI -> {
-                int approved = Actions.approveRuns(gh, pr.repo(), gh.pull(pr.number()).path("pullRequest"));
+                // Plain held runs only: one held at an environment since the refresh read it stays yours.
+                int approved = Actions.approveRuns(gh, pr.repo(), gh.pull(pr.number()).path("pullRequest"), true);
                 if (approved == 0) return pr;
                 System.out.println(pr.key() + ": " + s.say());
                 return pr.withCi("PENDING");

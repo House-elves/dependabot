@@ -21,6 +21,13 @@ final class Prs {
                 Instant.parse("2026-11-20T00:00:00Z"), Instant.parse("2026-11-24T00:00:00Z"));
     }
 
+    /** The same PR on another branch (a GitHub Actions bump: dependabot/github_actions/...). */
+    static Bumps.Pr onBranch(Bumps.Pr p, String headRef) {
+        return new Bumps.Pr(p.repo(), p.number(), p.title(), p.url(), p.author(), headRef, p.headSha(), p.base(),
+                p.defaultBranch(), p.ci(), p.reviewDecision(), p.mergeable(), p.mergeState(), p.approved(), p.draft(),
+                p.createdAt(), p.updatedAt());
+    }
+
     static MergeQueue.Item queued(Bumps.Pr pr) {
         return new MergeQueue.Item(pr.repo(), pr.number(), pr.title(), pr.base(), NOW, pr.headSha(), NOW, "Queued.", null);
     }

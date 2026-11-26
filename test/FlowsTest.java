@@ -88,6 +88,23 @@ class FlowsTest {
     }
 
     @Test
+    void ciHeldAtAnEnvironmentOrForAWorkflowChangeIsAlwaysYours() {
+        Bumps.Pr atEnv = Prs.pr(Bumps.AWAITING_DEPLOYMENT, "BLOCKED", "MERGEABLE");
+        Flows.Flow f = flow(atEnv, safe(atEnv));
+        assertEquals(Flows.YOU, f.waiting());
+        assertEquals("approve-ci", f.next().id());
+        assertFalse(f.ready());
+
+        Bumps.Pr action = Prs.onBranch(Prs.pr(Bumps.AWAITING_APPROVAL, "BLOCKED", "MERGEABLE"),
+                "dependabot/github_actions/actions/checkout-6");
+        Flows.Flow g = flow(action, safe(action));
+        assertEquals(Flows.YOU, g.waiting());
+        assertEquals("approve-ci", g.next().id());
+        assertTrue(g.say().contains("changes the workflows"), g.say());
+        assertFalse(g.ready());
+    }
+
+    @Test
     void queuedIsTheQueuesMoveWithItsPlaceInLine() {
         Bumps.Pr pr = Prs.pr("PENDING", "BLOCKED", "MERGEABLE");
         MergeQueue.Item q = Prs.queued(pr).with(Prs.SHA, Prs.NOW, "CI is running.", null);
