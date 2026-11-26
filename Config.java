@@ -75,5 +75,7 @@ public class Config {
     Path queuePath()    { return stateDir.resolve("queue.json"); }
     Path rebasingPath() { return stateDir.resolve("rebasing.json"); }
     Path mergedPath()   { return stateDir.resolve("merged.json"); }
+    Path retriesPath()  { return stateDir.resolve("retries.json"); }
+    Path checksPath()   { return stateDir.resolve("checks.json"); }
     Path lockPath()     { return stateDir.resolve(".lock"); }
 }

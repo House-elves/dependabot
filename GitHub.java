@@ -92,6 +92,16 @@ final class GitHub {
                 "-F", "number=" + number)).path("repository");
     }
 
+    /** The PR's description: for a bump, Dependabot's release notes, changelog and commits. */
+    String description(int number) throws IOException {
+        return json(gh("api", "repos/" + repo + "/pulls/" + number)).path("body").asText("");
+    }
+
+    /** The files the PR changes, with their patches (the first 30). */
+    JsonNode files(int number) throws IOException {
+        return json(gh("api", "repos/" + repo + "/pulls/" + number + "/files?per_page=30"));
+    }
+
     /** The PR's reviews, as pages of REST review objects. */
     JsonNode reviews(int number) throws IOException {
         return json(gh("api", "--paginate", "--slurp", "repos/" + repo + "/pulls/" + number + "/reviews"));

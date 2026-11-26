@@ -21,8 +21,8 @@ import java.util.function.UnaryOperator;
  * The tab's board, board/board.json: every open Dependabot PR in REPOS (but the mvnpm elf's), read from GitHub, each
  * with where it is ({@link Flows}) and its place in the merge queue.
  *
- * The refresh moves the merge queue on first, then reads GitHub (one search per repo, one at a time) and writes the
- * board. Everything else here only joins what the last read found with the elf's own files again, without asking
+ * The refresh moves the merge queue on first, then reads GitHub (one search per repo, one at a time), gets each bump
+ * ready ({@link Tend}, {@link SafetyCheck}) and writes the board. Everything else here only joins what the last read found with the elf's own files again, without asking
  * GitHub: after one of the tab's buttons.
  */
 final class Board {
@@ -34,8 +34,8 @@ final class Board {
 
     private Board() {}
 
-    /** One bump: the PR, what it bumps (null if the title isn't one bump), where it is, and its queue entry. */
-    record Row(Bumps.Pr pr, Bumps.Bump bump, Flows.Flow flow, MergeQueue.Item queued) {
+    /** One bump: the PR, what it bumps (null if the title isn't one bump), the safety check, where it is, its queue entry. */
+    record Row(Bumps.Pr pr, Bumps.Bump bump, SafetyCheck.Check check, Flows.Flow flow, MergeQueue.Item queued) {
     }
 
     /**
@@ -48,7 +48,10 @@ final class Board {
                 List<MergeQueue.Merged> merged, List<String> errors) {
     }
 
-    /** Moves the queue on, reads GitHub and writes the board. 1 when a repo couldn't be read (the others are still written). */
+    /**
+     * Moves the queue on, reads GitHub, gets each bump ready ({@link Tend}, then the {@link SafetyCheck} for a few
+     * not checked yet) and writes the board. 1 when a repo couldn't be read (the others are still written).
+     */
     static int refresh(Config config, boolean save) throws IOException {
         // What's green in the queue merges before GitHub is read, so it's off the board this time.
         if (save) MergeQueue.advance(config);
@@ -73,33 +76,81 @@ final class Board {
         }
         if (!save) {
             View v = build(config, Instant.now(), prs, errors);
-            v.rows().forEach(r -> System.out.println(r.pr().key() + "  " + r.pr().title() + "\n    " + r.flow().say()
-                    + (r.flow().next() == null ? "" : "  [" + r.flow().next().label() + "]")));
-            System.out.println(v.rows().size() + " open Dependabot PR(s); nothing saved");
+            Map<String, MergeQueue.Rebase> asked = MergeQueue.rebasing(config);
+            Map<String, Tend.Retry> retries = Tend.retries(config);
+            Set<String> busy = Tend.busyLanes(MergeQueue.all(config));
+            v.rows().forEach(r -> {
+                String would = r.queued() == null ? Tend.wouldDo(r.pr(), retries.get(r.pr().key()), asked.get(r.pr().key()),
+                        busy.contains(r.pr().lane()), r.check()) : null;
+                System.out.println(r.pr().key() + "  " + r.pr().title() + "\n    " + r.flow().say()
+                        + (r.flow().next() == null ? "" : "  [" + r.flow().next().label() + "]")
+                        + (would == null ? "" : "\n    The elf " + would + "."));
+            });
+            System.out.println(v.rows().size() + " open Dependabot PR(s); nothing written");
             return errors.isEmpty() ? 0 : 1;
         }
-        // A rebase asked for is done once the head moved (repos that couldn't be read keep theirs).
-        MergeQueue.locked(config, () -> {
-            Map<String, MergeQueue.Rebase> asked = new HashMap<>(MergeQueue.rebasing(config));
-            asked.entrySet().removeIf(e -> {
-                String repo = e.getKey().substring(0, e.getKey().indexOf('#'));
-                return errors.stream().noneMatch(x -> x.startsWith(repo + ": ")) && !e.getValue().sha().equals(heads.get(e.getKey()));
-            });
-            writeJson(config.rebasingPath(), asked);
-            // A stopped bump the queue no longer looks at, merged or closed on GitHub since: off the queue.
-            List<MergeQueue.Item> queue = new ArrayList<>(MergeQueue.all(config));
-            if (queue.removeIf(q -> errors.stream().noneMatch(x -> x.startsWith(q.repo() + ": ")) && !heads.containsKey(q.key()))) {
-                MergeQueue.write(config, queue);
-            }
-            return null;
-        });
-        View v = build(config, Instant.now(), prs, errors);
+        // Only what this read found is tended: the rows kept from the read before may be stale.
+        List<Bumps.Pr> fresh = prs.stream().filter(p -> heads.containsKey(p.key())).toList();
+        // The checks first: a bump checked safe now has its CI runs approved in this same refresh.
+        checkSome(config, fresh);
+        List<Bumps.Pr> tended = Tend.run(config, fresh);
+        Map<String, Bumps.Pr> after = new HashMap<>();
+        tended.forEach(p -> after.put(p.key(), p));
+        List<Bumps.Pr> now = prs.stream().map(p -> after.getOrDefault(p.key(), p)).toList();
+        cleanUp(config, heads, errors);
+        View v = build(config, Instant.now(), now, errors);
         writeJson(config.boardPath(), v);
         long queued = v.queue().stream().filter(q -> q.stopped() == null).count();
+        long ready = v.rows().stream().filter(r -> Flows.READY.equals(r.flow().waiting())).count();
         System.out.println(v.rows().size() + " open Dependabot PR(s) in " + String.join(", ", config.repos)
+                + (ready > 0 ? ", " + ready + " ready to merge" : "")
                 + (queued > 0 ? ", " + queued + " in the merge queue" : "")
                 + (errors.isEmpty() ? "" : "; couldn't read " + String.join("; ", errors)));
         return errors.isEmpty() ? 0 : 1;
+    }
+
+    /**
+     * The safety check for up to {@link SafetyCheck#PER_REFRESH} bumps not checked at their version yet: the ones
+     * closest to ready first (CI passed, then running), oldest first. Outside the lock: each takes some seconds.
+     */
+    static void checkSome(Config config, List<Bumps.Pr> prs) {
+        Map<String, SafetyCheck.Check> checks = SafetyCheck.all(config);
+        List<Bumps.Pr> todo = prs.stream()
+                .filter(p -> !Boolean.TRUE.equals(p.draft()) && SafetyCheck.current(checks, p) == null)
+                .sorted(Comparator.comparingInt((Bumps.Pr p) -> "SUCCESS".equals(p.ci()) ? 0 : Bumps.ciFailing(p) ? 2 : 1)
+                        .thenComparing(Bumps.Pr::createdAt, Comparator.nullsLast(Comparator.naturalOrder())))
+                .limit(SafetyCheck.PER_REFRESH).toList();
+        for (Bumps.Pr pr : todo) {
+            try {
+                SafetyCheck.Check c = SafetyCheck.ask(new GitHub(config, pr.repo()), pr);
+                if (c == null) continue;
+                SafetyCheck.put(config, pr.key(), c);
+                System.out.println(pr.key() + ": the safety check says " + c.verdict() + (c.reason() == null ? "" : " (" + c.reason() + ")"));
+            } catch (IOException | RuntimeException e) {
+                System.err.println("Couldn't check " + pr.key() + ": " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * What the elf keeps per bump, for bumps no longer open (repos that couldn't be read keep theirs): rebases asked
+     * at a head that moved since, stopped queue items, retries and checks.
+     */
+    private static void cleanUp(Config config, Map<String, String> heads, List<String> errors) throws IOException {
+        java.util.function.Predicate<String> read = key -> errors.stream().noneMatch(x -> x.startsWith(key.substring(0, key.indexOf('#')) + ": "));
+        MergeQueue.locked(config, () -> {
+            Map<String, MergeQueue.Rebase> asked = new HashMap<>(MergeQueue.rebasing(config));
+            if (asked.entrySet().removeIf(e -> read.test(e.getKey()) && !e.getValue().sha().equals(heads.get(e.getKey())))) {
+                writeJson(config.rebasingPath(), asked);
+            }
+            List<MergeQueue.Item> queue = new ArrayList<>(MergeQueue.all(config));
+            if (queue.removeIf(q -> read.test(q.key()) && !heads.containsKey(q.key()))) MergeQueue.write(config, queue);
+            Map<String, Tend.Retry> retries = new HashMap<>(Tend.retries(config));
+            if (retries.keySet().removeIf(k -> read.test(k) && !heads.containsKey(k))) writeJson(config.retriesPath(), retries);
+            Map<String, SafetyCheck.Check> checks = new HashMap<>(SafetyCheck.all(config));
+            if (checks.keySet().removeIf(k -> read.test(k) && !heads.containsKey(k))) writeJson(config.checksPath(), checks);
+            return null;
+        });
     }
 
     /** The board with its PRs changed by {@code change} (after one of the tab's buttons), joined again. */
@@ -121,11 +172,13 @@ final class Board {
 
     static View build(Config config, Instant fetchedAt, List<Bumps.Pr> prs, List<String> errors) {
         return build(config.githubUser, fetchedAt, config.repos, prs, MergeQueue.all(config), MergeQueue.rebasing(config),
-                MergeQueue.merged(config), errors, Instant.now());
+                MergeQueue.merged(config), Tend.retries(config), SafetyCheck.all(config), errors, Instant.now());
     }
 
     static View build(String login, Instant fetchedAt, List<String> repos, List<Bumps.Pr> prs, List<MergeQueue.Item> queue,
-                      Map<String, MergeQueue.Rebase> asked, List<MergeQueue.Merged> merged, List<String> errors, Instant now) {
+                      Map<String, MergeQueue.Rebase> asked, List<MergeQueue.Merged> merged, Map<String, Tend.Retry> retries,
+                      Map<String, SafetyCheck.Check> checks, List<String> errors, Instant now) {
+        Set<String> busy = Tend.busyLanes(queue);
         Map<String, Bumps.Pr> open = new HashMap<>();
         prs.forEach(p -> open.put(p.key(), p));
         // A queued bump that isn't open any more is off the board: it's gone from the queue at the next refresh.
@@ -141,11 +194,10 @@ final class Board {
                     if (x == q) break;
                 }
             }
-            MergeQueue.Rebase r = asked.get(pr.key());
-            Instant rebaseAsked = r != null && r.sha() != null && r.sha().equals(pr.headSha())
-                    && r.at().isAfter(now.minus(MergeQueue.REBASE_WAIT)) ? r.at() : null;
             Bumps.Bump bump = Bumps.bump(pr.title());
-            rows.add(new Row(pr, bump, Flows.flow(pr, bump, new Flows.Ctx(now, rebaseAsked, q, position)), q));
+            SafetyCheck.Check check = SafetyCheck.current(checks, pr);
+            rows.add(new Row(pr, bump, check, Flows.flow(pr, bump, new Flows.Ctx(now, asked.get(pr.key()), q, position,
+                    retries.get(pr.key()), check, busy.contains(pr.lane()))), q));
         }
         rows.sort(Comparator.comparing((Row x) -> x.pr().updatedAt(), Comparator.nullsLast(Comparator.reverseOrder())));
         return new View(login, fetchedAt, List.copyOf(repos), List.copyOf(rows), shown, merged, List.copyOf(errors));

@@ -3,6 +3,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -11,83 +12,121 @@ import org.junit.jupiter.api.Test;
 /** Where each bump is, and what the row offers. */
 class FlowsTest {
 
-    static Flows.Flow flow(Bumps.Pr pr) {
-        return Flows.flow(pr, Bumps.bump(pr.title()), new Flows.Ctx(Prs.NOW, null, null, 0));
+    static SafetyCheck.Check safe(Bumps.Pr pr) {
+        return new SafetyCheck.Check(pr.title(), "safe", "A minor release with bug fixes.", Prs.NOW);
+    }
+
+    static Flows.Flow flow(Bumps.Pr pr, SafetyCheck.Check check) {
+        return Flows.flow(pr, Bumps.bump(pr.title()), new Flows.Ctx(Prs.NOW, null, null, 0, null, check, false));
     }
 
     @Test
-    void greenIsYoursToMergeOrQueue() {
-        Flows.Flow f = flow(Prs.pr("SUCCESS", "CLEAN", "MERGEABLE"));
-        assertEquals(Flows.YOU, f.waiting());
+    void greenAndCheckedSafeIsReadyToMerge() {
+        Bumps.Pr pr = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
+        Flows.Flow f = flow(pr, safe(pr));
+        assertEquals(Flows.READY, f.waiting());
         assertEquals("merge", f.next().id());
         assertTrue(f.ready());
+        assertTrue(f.say().contains("bug fixes"), f.say());
     }
 
     @Test
-    void behindIsQueuedSoTheQueueRebasesIt() {
-        Flows.Flow f = flow(Prs.pr("SUCCESS", "BEHIND", "MERGEABLE"));
-        assertEquals("queue", f.next().id());
-        assertTrue(f.ready());
-    }
-
-    @Test
-    void failingCiAsksForARebaseAndIsntReady() {
-        Flows.Flow f = flow(Prs.pr("FAILURE", "UNSTABLE", "MERGEABLE"));
-        assertEquals("dependabot-rebase", f.next().id());
+    void greenButNotCheckedYetIsTheElfs() {
+        Flows.Flow f = flow(Prs.pr("SUCCESS", "CLEAN", "MERGEABLE"), null);
+        assertEquals(Flows.ELF, f.waiting());
         assertFalse(f.ready());
     }
 
     @Test
-    void runningCiIsCisMoveButCanBeQueued() {
-        Flows.Flow f = flow(Prs.pr("PENDING", "BLOCKED", "MERGEABLE"));
-        assertEquals(Flows.CI, f.waiting());
+    void aCarefulVerdictIsYoursAndNotForMergeAll() {
+        Bumps.Pr pr = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
+        Flows.Flow f = flow(pr, new SafetyCheck.Check(pr.title(), "careful", "Drops Java 17.", Prs.NOW));
+        assertEquals(Flows.YOU, f.waiting());
+        assertEquals("merge", f.next().id());
+        assertFalse(f.ready());
+        assertTrue(f.say().contains("Drops Java 17"), f.say());
+    }
+
+    @Test
+    void behindIsTheElfsToRebaseAndStillGoesInMergeAll() {
+        Bumps.Pr pr = Prs.pr("SUCCESS", "BEHIND", "MERGEABLE");
+        Flows.Flow f = flow(pr, safe(pr));
+        assertEquals(Flows.ELF, f.waiting());
         assertNull(f.next());
         assertTrue(f.ready());
     }
 
     @Test
-    void aMajorBumpIsNeverQueuedWithTheRest() {
-        Bumps.Pr pr = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
-        Bumps.Pr major = new Bumps.Pr(pr.repo(), 2776, "Bump io.smallrye.config:smallrye-config from 3.18.3 to 4.2.2", pr.url(),
-                pr.author(), pr.headRef(), pr.headSha(), pr.base(), pr.defaultBranch(), pr.ci(), null, pr.mergeable(),
-                pr.mergeState(), false, false, pr.createdAt(), pr.updatedAt());
-        Flows.Flow f = flow(major);
+    void aRebaseDependabotDidntDoIsYours() {
+        Bumps.Pr pr = Prs.pr("SUCCESS", "BEHIND", "MERGEABLE");
+        MergeQueue.Rebase old = new MergeQueue.Rebase(Prs.SHA, Prs.NOW.minus(Duration.ofHours(2)));
+        Flows.Flow f = Flows.flow(pr, Bumps.bump(pr.title()), new Flows.Ctx(Prs.NOW, old, null, 0, null, safe(pr), false));
+        assertEquals(Flows.YOU, f.waiting());
+        assertEquals("dependabot-rebase", f.next().id());
+    }
+
+    @Test
+    void failingCiIsTheElfsUntilItGaveUp() {
+        Bumps.Pr pr = Prs.pr("FAILURE", "UNSTABLE", "MERGEABLE");
+        assertEquals(Flows.ELF, flow(pr, safe(pr)).waiting());
+        Tend.Retry both = new Tend.Retry(pr.title(), Prs.SHA2, Prs.SHA2);
+        Flows.Flow f = Flows.flow(pr, Bumps.bump(pr.title()), new Flows.Ctx(Prs.NOW, null, null, 0, both, safe(pr), false));
+        assertEquals(Flows.YOU, f.waiting());
+        assertEquals("Merge anyway", f.next().label());
         assertFalse(f.ready());
-        assertEquals("merge", f.next().id());
-        assertTrue(f.say().contains("major"), f.say());
+    }
+
+    @Test
+    void ciWaitingForApprovalIsYoursOnlyWhenTheCheckSaysLookFirst() {
+        Bumps.Pr pr = Prs.pr(Bumps.AWAITING_APPROVAL, "BLOCKED", "MERGEABLE");
+        assertEquals(Flows.ELF, flow(pr, safe(pr)).waiting());
+        assertTrue(flow(pr, safe(pr)).ready());
+        assertEquals(Flows.ELF, flow(pr, null).waiting());
+        Flows.Flow f = flow(pr, new SafetyCheck.Check(pr.title(), "careful", "Drops Java 17.", Prs.NOW));
+        assertEquals(Flows.YOU, f.waiting());
+        assertEquals("approve-ci", f.next().id());
     }
 
     @Test
     void queuedIsTheQueuesMoveWithItsPlaceInLine() {
         Bumps.Pr pr = Prs.pr("PENDING", "BLOCKED", "MERGEABLE");
         MergeQueue.Item q = Prs.queued(pr).with(Prs.SHA, Prs.NOW, "CI is running.", null);
-        Flows.Flow first = Flows.flow(pr, Bumps.bump(pr.title()), new Flows.Ctx(Prs.NOW, null, q, 1));
+        Flows.Flow first = Flows.flow(pr, Bumps.bump(pr.title()), new Flows.Ctx(Prs.NOW, null, q, 1, null, safe(pr), true));
         assertEquals(Flows.QUEUE, first.waiting());
         assertEquals("Next in the merge queue. CI is running.", first.say());
-        Flows.Flow third = Flows.flow(pr, Bumps.bump(pr.title()), new Flows.Ctx(Prs.NOW, null, q, 3));
+        Flows.Flow third = Flows.flow(pr, Bumps.bump(pr.title()), new Flows.Ctx(Prs.NOW, null, q, 3, null, safe(pr), true));
         assertEquals("In the merge queue, 3rd in line.", third.say());
         assertEquals(List.of("unqueue"), third.more().stream().map(Flows.Next::id).toList());
+        assertFalse(third.ready());
     }
 
     @Test
     void stoppedInTheQueueIsYoursAgain() {
         Bumps.Pr pr = Prs.pr("FAILURE", "UNSTABLE", "MERGEABLE");
-        MergeQueue.Item q = Prs.queued(pr).with(Prs.SHA, Prs.NOW, null, "CI failed. Look at what failed, then queue it again.");
-        Flows.Flow f = Flows.flow(pr, Bumps.bump(pr.title()), new Flows.Ctx(Prs.NOW, null, q, 0));
+        MergeQueue.Item q = Prs.queued(pr).with(Prs.SHA, Prs.NOW, null, "CI still fails after a re-run and a rebase.");
+        Flows.Flow f = Flows.flow(pr, Bumps.bump(pr.title()), new Flows.Ctx(Prs.NOW, null, q, 0, null, null, false));
         assertEquals(Flows.YOU, f.waiting());
         assertEquals("queue", f.next().id());
-        assertTrue(f.say().startsWith("Stopped in the merge queue: CI failed"), f.say());
+        assertTrue(f.say().startsWith("Stopped in the merge queue: CI still fails"), f.say());
     }
 
     @Test
-    void theBoardNumbersEachLineOfTheQueueOnItsOwn() {
+    void theBoardNumbersEachLineOfTheQueueOnItsOwnAndHoldsBackTheRestOfABusyLine() {
         Bumps.Pr a = Prs.pr("SUCCESS", "BEHIND", "MERGEABLE");
         Bumps.Pr b = new Bumps.Pr(a.repo(), 2814, "[2.x] Bump io.micrometer:micrometer-core from 1.17.2 to 1.17.3", a.url(),
                 a.author(), a.headRef(), Prs.SHA2, "2.x", "main", "PENDING", null, "MERGEABLE", "BLOCKED", false, false,
                 a.createdAt(), a.updatedAt());
-        Board.View v = Board.build("me", Prs.NOW, List.of(a.repo()), List.of(a, b), List.of(Prs.queued(a), Prs.queued(b)),
-                Map.of(), List.of(), List.of(), Prs.NOW);
+        Bumps.Pr c = new Bumps.Pr(a.repo(), 2815, "Bump io.vertx:vertx-core from 4.5.1 to 4.5.2", a.url(),
+                a.author(), a.headRef(), Prs.SHA2, "main", "main", "SUCCESS", null, "MERGEABLE", "BEHIND", false, false,
+                a.createdAt(), a.updatedAt());
+        Board.View v = Board.build("me", Prs.NOW, List.of(a.repo()), List.of(a, b, c), List.of(Prs.queued(a), Prs.queued(b)),
+                Map.of(), List.of(), Map.of(), Map.of(), List.of(), Prs.NOW);
+        Map<Integer, Flows.Flow> by = new java.util.HashMap<>();
+        v.rows().forEach(r -> by.put(r.pr().number(), r.flow()));
         // Different branches, different lines: both are next in theirs.
-        v.rows().forEach(r -> assertTrue(r.flow().say().startsWith("Next in the merge queue"), r.flow().say()));
+        assertTrue(by.get(2813).say().startsWith("Next in the merge queue"), by.get(2813).say());
+        assertTrue(by.get(2814).say().startsWith("Next in the merge queue"), by.get(2814).say());
+        // Not queued, behind, in main where the queue works: rebased once it's through.
+        assertTrue(by.get(2815).say().contains("once the merge queue is through"), by.get(2815).say());
     }
 }

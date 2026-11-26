@@ -1,19 +1,23 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run the Dependabot elf.
 name: dependabot
 title: Dependabot
-version: 1.0.0
+version: 1.1.0
 author: "@phillip-kruger"
-description: Dependabot's PRs in the repos you list, on a tab of their own instead of the GitHub board. Queue the ready ones with a click and a merge queue merges them one at a time, asking Dependabot to rebase each and waiting for its CI.
+description: Dependabot's PRs in the repos you list, on a tab of their own instead of the GitHub board, each made ready to merge by itself. It asks Dependabot to rebase a bump that a merge put behind, retries failing CI, and has a coding agent check that the bump is safe. You click Merge, or Merge all.
 main: Dependabot.java
 config: ~/.config/dependabot/config
 tools: [gh]
+# The safety check asks a coding agent (prompt in, verdict out, no tools): Claude Code unless you choose another in its settings.
+ai: [ask]
 
 reads:
   - The open Dependabot PRs in the repos you list, with their CI, reviews and merge state, through gh as your account. The mvnpm elf's bumps (org.mvnpm, in the repos it checks) are left to it.
+  - Each bump's description (Dependabot's release notes and changelog) and diff, which it gives the coding agent for the safety check, once per bump and version.
 writes:
-  - Its board, its merge queue, the rebases it asked for and what merged lately, in ~/.config/dependabot/.
-  - On GitHub, as your account, only after you click and confirm it in the desk's bar - approving a PR's CI runs, re-running its failed CI jobs, merging a green PR at the head you saw (approving it first when the repo wants a review), closing a PR, and the comment "@dependabot rebase".
-  - The PRs you queue to merge, one at a time per repo and branch, at its refresh (every 10 minutes on weekdays) - it comments "@dependabot rebase" on one that's behind its base, approves one the repo wants a review for, and merges it once its CI passes at that head. Only what you queued; one that fails stops and waits for you.
+  - Its board, its merge queue, the rebases and retries it asked for, the safety checks and what merged lately, in ~/.config/dependabot/.
+  - On GitHub, as your account, by itself at its refresh (every 10 minutes on weekdays) - the comment "@dependabot rebase" on a bump that's behind its base or in conflict (once per head); for a bump whose CI fails, re-running its failed jobs once, then that comment once; and approving the CI runs waiting on a bump, only once the safety check said it's safe. Nothing else without your click, and it never merges by itself.
+  - On GitHub, as your account, only after you click and confirm it in the desk's bar - approving a PR's CI runs, re-running its failed CI jobs, merging a PR at the head you saw (approving it first when the repo wants a review), closing a PR, and the comment "@dependabot rebase".
+  - Merge all, after you click and confirm it - the bumps checked safe go in a merge queue that merges them one at a time per repo and branch at its refresh, asking Dependabot to rebase each after the merge before it, approving one the repo wants a review for, and merging it once its CI passes at that head. One that can't stops and waits for you.
 
 settings:
   - key: GITHUB_USER
@@ -41,7 +45,7 @@ dry-run: dry-run
 tab:
   page: ui/dependabot.js
   card: true
-# Every 10 minutes on weekdays, 07:00 to 19:00: the merge queue moves on at each one.
+# Every 10 minutes on weekdays, 07:00 to 19:00: the merge queue moves on and every bump is tended at each one.
 refresh:
   command: board
   schedule: "Mon..Fri *-*-* 7..19:00; Mon..Fri *-*-* 7..18:10; Mon..Fri *-*-* 7..18:20; Mon..Fri *-*-* 7..18:30; Mon..Fri *-*-* 7..18:40; Mon..Fri *-*-* 7..18:50"
@@ -73,25 +77,25 @@ actions:
   merge:
     label: Merge a green PR
     args: [--action=merge]
-    confirm: "Merge {repo}#{pr} on GitHub, as you, at the commit you saw? If the repo wants a review, you approve it first."
+    confirm: "Merge {repo}#{pr} on GitHub, as you, at the commit you saw? If the repo wants a review, you approve it first. The other bumps into that branch are rebased by the elf after."
     params:
       repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
       pr: {kind: int}
       headSha: {pattern: '[0-9a-f]{40}', max: 40}
   queue:
-    label: Queue a PR to merge
+    label: Put a PR back in the merge queue
     args: [--action=queue]
-    confirm: "Queue {repo}#{pr} to merge? As you, the queue asks Dependabot to rebase it when it's behind, approves it if the repo wants a review, and merges it once CI passes, after the ones queued before it."
+    confirm: "Put {repo}#{pr} back in the merge queue? As you, the queue asks Dependabot to rebase it when it's behind, approves it if the repo wants a review, and merges it once CI passes and the safety check says it's safe."
     params:
       repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
       pr: {kind: int}
-  queue-ready:
-    label: Queue every ready PR to merge
-    args: [--action=queue-ready]
-    confirm: "Queue every ready bump to merge ({count})? Green, behind or with CI running, not major. As you, the queue merges them one at a time per repo and branch, asking Dependabot to rebase each and waiting for its CI. One that fails stops; the rest go on."
+  merge-all:
+    label: Merge every bump checked safe
+    args: [--action=merge-all]
+    confirm: "Merge all {count} bumps the safety check said are safe? As you, the queue merges them one at a time per repo and branch, asking Dependabot to rebase each after the merge before it and waiting for its CI. One that fails stops; the rest go on."
     params:
       # For the confirm bar's words: the elf queues what its board says is ready.
-      count: {pattern: '[0-9]{1,3} PRs?', max: 10}
+      count: {pattern: '[0-9]{1,3}', max: 3}
   unqueue:
     label: Take a PR off the merge queue
     args: [--action=unqueue]
@@ -103,6 +107,13 @@ actions:
     label: Ask Dependabot to rebase
     args: [--action=dependabot-rebase]
     confirm: "Comment \"@dependabot rebase\" on {repo}#{pr}, as you?"
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  recheck:
+    label: Ask the safety check again
+    args: [--action=recheck]
+    ask: false
     params:
       repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
       pr: {kind: int}

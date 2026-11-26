@@ -12,8 +12,10 @@ class MergeQueueTest {
 
     static final Instant NOW = Prs.NOW;
 
+    static final SafetyCheck.Check SAFE = new SafetyCheck.Check("Bump org.mongodb:bson from 5.14.0 to 5.15.0", "safe", "A minor release.", NOW);
+
     static MergeQueue.Do next(Bumps.Pr pr, MergeQueue.Rebase asked, boolean approved) {
-        return MergeQueue.next(pr, "OPEN", Prs.queued(pr), asked, approved, NOW).what();
+        return MergeQueue.next(pr, "OPEN", Prs.queued(pr), asked, approved, null, SAFE, NOW).what();
     }
 
     @Test
@@ -35,9 +37,32 @@ class MergeQueueTest {
     }
 
     @Test
-    void failingOrHeldCiStops() {
-        assertEquals(MergeQueue.Do.STOP, next(Prs.pr("FAILURE", "UNSTABLE", "MERGEABLE"), null, false));
-        assertEquals(MergeQueue.Do.STOP, next(Prs.pr(Bumps.AWAITING_APPROVAL, "BLOCKED", "MERGEABLE"), null, false));
+    void failingCiIsReRunThenRebasedThenStops() {
+        Bumps.Pr failing = Prs.pr("FAILURE", "UNSTABLE", "MERGEABLE");
+        String title = failing.title();
+        assertEquals(MergeQueue.Do.RERUN, MergeQueue.next(failing, "OPEN", Prs.queued(failing), null, false, null, SAFE, NOW).what());
+        Tend.Retry rerun = new Tend.Retry(title, Prs.SHA2, null);
+        assertEquals(MergeQueue.Do.REBASE_FOR_CI, MergeQueue.next(failing, "OPEN", Prs.queued(failing), null, false, rerun, SAFE, NOW).what());
+        // Rebased for it, and failing at the new head too: yours.
+        Tend.Retry both = new Tend.Retry(title, Prs.SHA2, Prs.SHA2);
+        assertEquals(MergeQueue.Do.STOP, MergeQueue.next(failing, "OPEN", Prs.queued(failing), null, false, both, SAFE, NOW).what());
+        // A rebase asked at this head: it waits for it.
+        assertEquals(MergeQueue.Do.WAIT, MergeQueue.next(failing, "OPEN", Prs.queued(failing),
+                new MergeQueue.Rebase(Prs.SHA, NOW.minusSeconds(60)), false, both, SAFE, NOW).what());
+        Bumps.Pr held = Prs.pr(Bumps.AWAITING_APPROVAL, "BLOCKED", "MERGEABLE");
+        assertEquals(MergeQueue.Do.APPROVE_CI, next(held, null, false));
+        assertEquals(MergeQueue.Do.STOP, MergeQueue.next(held, "OPEN", Prs.queued(held), null, false, null,
+                new SafetyCheck.Check(held.title(), "careful", "Drops Java 17.", NOW), NOW).what());
+    }
+
+    @Test
+    void onlyWhatTheSafetyCheckSaidIsSafeMerges() {
+        Bumps.Pr green = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
+        assertEquals(MergeQueue.Do.WAIT, MergeQueue.next(green, "OPEN", Prs.queued(green), null, false, null, null, NOW).what());
+        SafetyCheck.Check careful = new SafetyCheck.Check(green.title(), "careful", "Drops Java 17.", NOW);
+        MergeQueue.Step s = MergeQueue.next(green, "OPEN", Prs.queued(green), null, false, null, careful, NOW);
+        assertEquals(MergeQueue.Do.STOP, s.what());
+        assertTrue(s.say().contains("Java 17"), s.say());
     }
 
     @Test
@@ -45,7 +70,7 @@ class MergeQueueTest {
         Bumps.Pr running = Prs.pr("PENDING", "BLOCKED", "MERGEABLE");
         assertEquals(MergeQueue.Do.WAIT, next(running, null, false));
         MergeQueue.Item old = Prs.queued(running).with(Prs.SHA, NOW.minus(Duration.ofHours(7)), "CI is running.", null);
-        assertEquals(MergeQueue.Do.STOP, MergeQueue.next(running, "OPEN", old, null, false, NOW).what());
+        assertEquals(MergeQueue.Do.STOP, MergeQueue.next(running, "OPEN", old, null, false, null, SAFE, NOW).what());
     }
 
     @Test
@@ -60,7 +85,7 @@ class MergeQueueTest {
         Bumps.Pr pr = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
         MergeQueue.Item it = new MergeQueue.Item(pr.repo(), pr.number(), "Bump org.mongodb:bson from 5.14.0 to 5.14.1", "main",
                 NOW, Prs.SHA, NOW, null, null);
-        MergeQueue.Step s = MergeQueue.next(pr, "OPEN", it, null, false, NOW);
+        MergeQueue.Step s = MergeQueue.next(pr, "OPEN", it, null, false, null, SAFE, NOW);
         assertEquals(MergeQueue.Do.STOP, s.what());
         assertTrue(s.say().contains("5.15.0"), s.say());
     }
@@ -68,8 +93,8 @@ class MergeQueueTest {
     @Test
     void mergedOrClosedLeavesTheQueue() {
         Bumps.Pr pr = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
-        assertEquals(MergeQueue.Do.GONE, MergeQueue.next(pr, "MERGED", Prs.queued(pr), null, false, NOW).what());
-        assertEquals(MergeQueue.Do.GONE, MergeQueue.next(pr, "CLOSED", Prs.queued(pr), null, false, NOW).what());
+        assertEquals(MergeQueue.Do.GONE, MergeQueue.next(pr, "MERGED", Prs.queued(pr), null, false, null, SAFE, NOW).what());
+        assertEquals(MergeQueue.Do.GONE, MergeQueue.next(pr, "CLOSED", Prs.queued(pr), null, false, null, SAFE, NOW).what());
     }
 
     @Test

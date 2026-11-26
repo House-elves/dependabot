@@ -1,17 +1,18 @@
 // The Dependabot elf's tab on Elf Desk, and its dashboard card: Dependabot's open PRs in the repos it handles, by
-// whose move each one is, and the merge queue that merges the ones you queued one at a time. It reads board/board.json
-// (the elf's refresh writes it). Approving CI, re-running it, merging, queueing, rebasing and closing are its actions,
-// which wait for your click in the desk's bar before anything is written to GitHub.
+// whose move each one is. The elf gets each one ready by itself at its refresh (rebases, CI retries, a safety check);
+// you merge the ready ones, one by one or with Merge all, whose merge queue merges them one at a time. It reads
+// board/board.json (the elf's refresh writes it). Merging, approving CI, re-running it, rebasing and closing are its
+// actions, which wait for your click in the desk's bar before anything is written to GitHub.
 import {
     LitElement, html, css, svg, shared, cardStyles, spinner, ago, count, settingsButton, Ticking, elf,
 } from '/elf-kit/1/kit.js';
 
 /** The tab's sections, by whose move it is (the board's flow.waiting). */
 const SECTIONS = [
-    { id: 'you', title: 'Your move', empty: 'Nothing needs you right now.' },
-    { id: 'queue', title: 'Merge queue' },
-    { id: 'ci', title: 'Waiting on CI' },
-    { id: 'others', title: 'Waiting on others' },
+    { id: 'ready', title: 'Ready to merge', empty: 'Nothing is ready yet: the elf is getting them ready.' },
+    { id: 'you', title: 'Needs you' },
+    { id: 'queue', title: 'Merge queue', hint: 'One at a time per repo and branch, rebasing the next after each merge. It moves on at each refresh.' },
+    { id: 'elf', title: 'Being got ready', hint: 'At each refresh, every 10 minutes: it asks Dependabot to rebase, re-runs failed CI, and checks each bump.' },
 ];
 
 async function board() {
@@ -66,6 +67,15 @@ function bumpChip(row) {
         ${name} <span class="from">${b.from}</span> → <b>${b.to}</b></span>${b.kind === 'major' ? html` <span class="chip warn">Major</span>` : ''}`;
 }
 
+/** The safety check's verdict, its reason on hover. */
+function checkChip(row) {
+    const c = row.check;
+    if (!c) return '';
+    return c.verdict === 'safe'
+        ? html`<span class="chip ok" title=${c.reason ?? ''}>Checked safe</span>`
+        : html`<span class="chip warn" title=${c.reason ?? ''}>Look first</span>`;
+}
+
 /** "into 2.x" when it doesn't go into the repo's default branch. */
 function baseChip(pr) {
     if (!pr.base || pr.base === pr.defaultBranch) return '';
@@ -103,7 +113,7 @@ class DependabotTab extends LitElement {
         .sec-head h2 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
         .sec-head .n { color: var(--muted); font-size: 15px; }
         .sec-head .hint { color: var(--muted); font-size: 13px; }
-        section.you > .panel { box-shadow: inset 3px 0 0 var(--accent); }
+        section.ready > .panel, section.you > .panel { box-shadow: inset 3px 0 0 var(--accent); }
         ul { list-style: none; margin: 0; padding: 4px 0; }
         li {
             display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 4px 14px; align-items: start;
@@ -204,15 +214,15 @@ class DependabotTab extends LitElement {
         return (this._board?.rows ?? []).filter(r => r.flow.ready);
     }
 
-    async _queueReady() {
+    async _mergeAll() {
         const n = this._ready.length;
-        this._doing = 'queue-ready';
+        this._doing = 'merge-all';
         this._error = null;
         try {
-            await elf.act('queue-ready', { count: `${n} PR${n === 1 ? '' : 's'}` });
+            await elf.act('merge-all', { count: String(n) });
             await this._load();
         } catch (e) {
-            if (!e.cancelled) this._error = `Queue every ready one: ${e.message}`;
+            if (!e.cancelled) this._error = `Merge all: ${e.message}`;
         } finally {
             this._doing = null;
         }
@@ -260,8 +270,8 @@ class DependabotTab extends LitElement {
                 <button ?disabled=${this._refreshing} @click=${() => this._refresh()}>
                     ${this._refreshing ? spinner : ''}${this._refreshing ? 'Refreshing' : 'Refresh'}</button>
                 ${n ? html`<button class="primary" ?disabled=${this._doing !== null}
-                    title="Queues every bump that's green, behind its base or with CI running, and not major: the queue merges them one at a time"
-                    @click=${() => this._queueReady()}>${this._doing === 'queue-ready' ? spinner : ''}Queue ${count(n, 'ready PR')} to merge</button>` : ''}
+                    title="Every bump the safety check said is safe, into the merge queue: it merges them one at a time per repo and branch, rebasing each after the merge before it and waiting for its CI"
+                    @click=${() => this._mergeAll()}>${this._doing === 'merge-all' ? spinner : ''}Merge all ${n}</button>` : ''}
             </div>
             ${failed ? html`<div class="failed" role="alert">
                 <p class="error">The last refresh failed. The end of its log:</p><pre>${failed}</pre></div>` : ''}`;
@@ -285,16 +295,16 @@ class DependabotTab extends LitElement {
     _sections(b) {
         if (!b.rows.length) return html`<div class="panel"><p class="empty">No open Dependabot PRs.</p></div>`;
         const by = Object.fromEntries(SECTIONS.map(s => [s.id, []]));
-        b.rows.forEach(r => (by[r.flow.waiting] ?? by.others).push(r));
+        b.rows.forEach(r => (by[r.flow.waiting] ?? by.you).push(r));
         // The queue in its order: line by line, as it merges them.
         const order = new Map((b.queue ?? []).map((q, i) => [`${q.repo}#${q.pr}`, i]));
         by.queue.sort((x, y) => (order.get(key(x.pr)) ?? 0) - (order.get(key(y.pr)) ?? 0));
         return SECTIONS.map(s => {
             const rows = by[s.id];
-            if (!rows.length && s.id !== 'you') return '';
+            if (!rows.length && s.id !== 'ready') return '';
             return html`<section class=${s.id} aria-labelledby="h-${s.id}">
                 <div class="sec-head"><h2 id="h-${s.id}">${s.title}</h2><span class="n">${rows.length}</span>
-                    ${s.id === 'queue' ? html`<span class="hint">One at a time per repo and branch. It moves on at each refresh.</span>` : ''}</div>
+                    ${s.hint ? html`<span class="hint">${s.hint}</span>` : ''}</div>
                 <div class="panel">${rows.length ? html`<ul>${rows.map(r => this._row(r))}</ul>` : html`<p class="empty">${s.empty}</p>`}</div>
             </section>`;
         });
@@ -320,6 +330,7 @@ class DependabotTab extends LitElement {
                     ${baseChip(pr)}
                     ${bumpChip(row)}
                     ${this._ciChip(pr)}
+                    ${checkChip(row)}
                 </div>
                 ${this._ciOpen === key(pr) ? this._ciPanel(pr) : ''}
                 <div class="meta">
@@ -466,7 +477,7 @@ class DependabotCard extends LitElement {
             this._board = null;
         }
         this._loaded = true;
-        elf.card({ attention: (this._board?.rows ?? []).some(r => r.flow.waiting === 'you') });
+        elf.card({ attention: (this._board?.rows ?? []).some(r => r.flow.waiting === 'you' || r.flow.waiting === 'ready') });
     }
 
     render() {
@@ -481,11 +492,11 @@ class DependabotCard extends LitElement {
         } else {
             const yours = b.rows.filter(r => r.flow.waiting === 'you').length;
             const queued = b.rows.filter(r => r.flow.waiting === 'queue').length;
-            const ready = b.rows.filter(r => r.flow.ready).length;
+            const ready = b.rows.filter(r => r.flow.waiting === 'ready').length;
             const merged = (b.merged ?? []).filter(m => Date.now() - Date.parse(m.at) < 86400000).length;
-            say = html`<a href="#">${count(b.rows.length, 'Dependabot PR')}</a>${ready ? html`, ${ready} ready to queue` : ''}${
+            say = html`<a href="#">${count(b.rows.length, 'Dependabot PR')}</a>${ready ? html`, ${ready} ready to merge` : ''}${
                 queued ? html`, ${queued} in the merge queue` : ''}${merged ? html`, ${merged} merged today` : ''}${
-                yours ? html`. ${yours} ${yours === 1 ? 'needs' : 'need'} your move.` : '. Nothing needs you.'}`;
+                yours ? html`. ${yours} ${yours === 1 ? 'needs' : 'need'} you.` : ''}`;
         }
         const failed = !this._state?.running?.board && this._state?.failed?.board;
         return html`<p class="say">${say}</p>

@@ -17,18 +17,19 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 
 /**
- * The merge queue: the bumps you queued with a click, merged one at a time per repo and branch, as you'd do it by
- * hand. Bumps into the same branch all touch the same files, so each merge puts the next one behind its base (or in
- * conflict): the queue asks Dependabot to rebase it, waits for CI to pass again, and merges it, then goes on to the next.
- * Nothing merges that you didn't queue, and only at a head whose CI passed.
+ * The merge queue: the bumps you merge with Merge all, one at a time per repo and branch, as you'd do it by hand.
+ * Bumps into the same branch all touch the same files, so each merge puts the next one behind its base (or in
+ * conflict): the queue asks Dependabot to rebase it, waits for CI to pass again, and merges it, then goes on to the
+ * next. Failing CI is retried as {@link Tend} does: its failed jobs re-run once, then a rebase. Only bumps the safety
+ * check ({@link SafetyCheck}) said are safe merge, and only at a head whose CI passed.
  *
  * <p>
- * A bump that can't go on (CI failed, Dependabot changed it to another version, CI waits for your approval, nothing
- * moved for {@link #STUCK}) stops: it stays in the queue with why, and the ones after it go on without it.
+ * A bump that can't go on (CI still fails, Dependabot changed it to another version, CI waits for your approval,
+ * nothing moved for {@link #STUCK}) stops: it stays in the queue with why, and the ones after it go on without it.
  *
  * <p>
- * It moves on at each refresh (every 10 minutes on weekdays) and right after you queue something: state/queue.json,
- * in the order you queued them. One process at a time changes it ({@link #locked}).
+ * It moves on at each refresh (every 10 minutes on weekdays) and right after you click: state/queue.json, in the
+ * order they were queued. One process at a time changes it ({@link #locked}).
  */
 final class MergeQueue {
 
@@ -69,7 +70,7 @@ final class MergeQueue {
     record Merged(String repo, int pr, String title, String url, Instant at, boolean queued) {
     }
 
-    enum Do { MERGE, APPROVE, REBASE, WAIT, STOP, GONE }
+    enum Do { MERGE, APPROVE, APPROVE_CI, REBASE, REBASE_FOR_CI, RERUN, WAIT, STOP, GONE }
 
     record Step(Do what, String say) {
     }
@@ -80,8 +81,11 @@ final class MergeQueue {
      * @param state       OPEN, MERGED or CLOSED
      * @param rebaseAsked when a rebase was asked at this head, or null
      * @param approved    you approved it at this head already
+     * @param retry       the retries it had for failing CI
+     * @param check       the safety check at its title, or null while it wasn't checked
      */
-    static Step next(Bumps.Pr pr, String state, Item it, Rebase rebaseAsked, boolean approved, Instant now) {
+    static Step next(Bumps.Pr pr, String state, Item it, Rebase rebaseAsked, boolean approved, Tend.Retry retry,
+                     SafetyCheck.Check check, Instant now) {
         if (!"OPEN".equals(state)) return new Step(Do.GONE, "MERGED".equals(state) ? "Merged" : "Closed");
         if (it.title() != null && !it.title().equals(pr.title())) {
             return new Step(Do.STOP, "Dependabot changed it since you queued it (" + pr.title() + "). Queue it again.");
@@ -97,9 +101,31 @@ final class MergeQueue {
             return new Step(Do.WAIT, "Waiting for Dependabot's rebase.");
         }
         if (Bumps.AWAITING_APPROVAL.equals(pr.ci())) {
-            return new Step(Do.STOP, "CI waits for you to approve its run: Approve CI run, then queue it again.");
+            if (check != null && check.safe()) return new Step(Do.APPROVE_CI, "The safety check says safe: approved its CI runs.");
+            if (check == null) return new Step(Do.WAIT, "CI waits for approval: approved once the safety check says safe.");
+            return new Step(Do.STOP, "CI waits for you to approve its run: the safety check says to look first"
+                    + (check.reason() == null ? "." : ": " + check.reason()));
         }
-        if (Bumps.ciFailing(pr)) return new Step(Do.STOP, "CI failed. Look at what failed, then queue it again.");
+        if (Bumps.ciFailing(pr)) {
+            if (asked) {
+                return rebaseAsked.at().isBefore(now.minus(REBASE_WAIT))
+                        ? new Step(Do.STOP, "Dependabot didn't rebase it within an hour of being asked.")
+                        : new Step(Do.WAIT, "CI failed: waiting for Dependabot's rebase.");
+            }
+            Tend.Step t = Tend.next(pr, retry, null, false, check);
+            if (t.what() == Tend.Do.RERUN) return new Step(Do.RERUN, t.say());
+            if (t.what() == Tend.Do.REBASE_FOR_CI) return new Step(Do.REBASE_FOR_CI, t.say());
+            return new Step(Do.STOP, "CI still fails after a re-run and a rebase. Look at what failed.");
+        }
+        if ((Bumps.green(pr) || Bumps.greenButReview(pr)) && (check == null || !check.safe())) {
+            if (check != null) {
+                return new Step(Do.STOP, "The safety check says to look first" + (check.reason() == null ? "." : ": " + check.reason()));
+            }
+            if (it.since() != null && it.since().isBefore(now.minus(STUCK))) {
+                return new Step(Do.STOP, "The safety check didn't answer for " + STUCK.toHours() + " hours.");
+            }
+            return new Step(Do.WAIT, "CI passed. Waiting for the safety check.");
+        }
         if (Bumps.green(pr)) return new Step(Do.MERGE, "Merged");
         if (Bumps.greenButReview(pr)) {
             return approved ? new Step(Do.WAIT, "Approved; waiting for GitHub to let it merge.")
@@ -257,7 +283,10 @@ final class MergeQueue {
         Rebase asked = rebasing(config).get(it.key());
         // Your reviews are read only when the repo wants one: one call less for every other bump.
         boolean approved = Bumps.greenButReview(pr) && Actions.approvedAt(gh, it.pr(), pr.headSha(), config.githubUser);
-        Step s = next(pr, node.path("state").asText(), seen, asked, approved, now);
+        Tend.Retry retry = Tend.retries(config).get(it.key());
+        if ("SUCCESS".equals(pr.ci()) && retry != null) Tend.putRetry(config, it.key(), null);
+        Step s = next(pr, node.path("state").asText(), seen, asked, approved, retry,
+                SafetyCheck.current(SafetyCheck.all(config), pr), now);
         switch (s.what()) {
             case GONE -> {
                 replace(items, it, null);
@@ -273,6 +302,15 @@ final class MergeQueue {
                 Actions.askRebase(config, gh, pr);
                 replace(items, it, seen.with(seen.sha(), now, s.say(), null));
                 System.out.println(it.key() + ": " + s.say());
+                return false;
+            }
+            case RERUN, REBASE_FOR_CI, APPROVE_CI -> {
+                Tend.act(config, gh, pr, retry, new Tend.Step(switch (s.what()) {
+                    case RERUN -> Tend.Do.RERUN;
+                    case APPROVE_CI -> Tend.Do.APPROVE_CI;
+                    default -> Tend.Do.REBASE_FOR_CI;
+                }, s.say()));
+                replace(items, it, seen.with(seen.sha(), now, s.say(), null));
                 return false;
             }
             case APPROVE -> {

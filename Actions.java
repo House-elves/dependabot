@@ -8,8 +8,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * What the tab's buttons do. The writes to GitHub (approve CI, re-run it, merge, queue, rebase, close) are actions with
- * ask: true in elf.yaml, so the desk shows its confirm bar and nothing is written until you click there. The values
+ * What the tab's buttons do. The writes to GitHub (approve CI, re-run it, merge, merge all, queue, rebase, close) are
+ * actions with ask: true in elf.yaml, so the desk shows its confirm bar and nothing is written until you click there. The values
  * come as JSON on stdin (the runner checked them against elf.yaml first); the answer is the last line printed. Each
  * reads the PR from GitHub again first and refuses what doesn't fit: only open Dependabot PRs in REPOS that aren't
  * the mvnpm elf's, and a merge only at the head you saw, with CI green.
@@ -26,7 +26,7 @@ final class Actions {
     static int run(Config config, String action, JsonNode values) {
         try {
             ObjectNode answer = switch (action) {
-                case "queue-ready" -> queueReady(config);
+                case "merge-all" -> mergeAll(config);
                 case "unqueue" -> unqueue(config, key(config, values));
                 default -> {
                     String repo = repo(config, values);
@@ -43,6 +43,7 @@ final class Actions {
                         case "queue" -> queue(config, gh, repo, number);
                         case "dependabot-rebase" -> rebase(config, gh, repo, number);
                         case "close" -> close(config, gh, repo, number);
+                        case "recheck" -> recheck(config, gh, repo, number);
                         default -> throw new IllegalArgumentException("Not one of the Dependabot elf's actions: " + action);
                     };
                 }
@@ -90,8 +91,16 @@ final class Actions {
 
     static ObjectNode approveCi(Config config, GitHub gh, String repo, int number) throws IOException {
         Pull p = pull(gh, repo, number);
-        List<Bumps.Approval> runs = Bumps.awaitingApproval(p.node().path("commits").path("nodes").path(0).path("commit"));
-        if (runs.isEmpty()) throw new IllegalStateException("No workflow runs on " + repo + "#" + number + " wait for approval.");
+        int n = approveRuns(gh, repo, p.node());
+        if (n == 0) throw new IllegalStateException("No workflow runs on " + repo + "#" + number + " wait for approval.");
+        System.out.println("Approved " + n + " workflow run(s) on " + repo + "#" + number);
+        Board.update(config, prs -> prs.stream().map(x -> x.key().equals(p.pr().key()) ? x.withCi("PENDING") : x).toList());
+        return Board.MAPPER.createObjectNode().put("approved", n);
+    }
+
+    /** Approves the workflow runs waiting on the PR's head (a GraphQL pullRequest node). How many it approved. */
+    static int approveRuns(GitHub gh, String repo, JsonNode node) throws IOException {
+        List<Bumps.Approval> runs = Bumps.awaitingApproval(node.path("commits").path("nodes").path(0).path("commit"));
         for (Bumps.Approval run : runs) {
             if (run.environments().isEmpty()) {
                 gh.write("POST", "/repos/" + repo + "/actions/runs/" + run.run() + "/approve", Board.MAPPER.createObjectNode());
@@ -101,9 +110,7 @@ final class Actions {
                 gh.write("POST", "/repos/" + repo + "/actions/runs/" + run.run() + "/pending_deployments", body);
             }
         }
-        System.out.println("Approved " + runs.size() + " workflow run(s) on " + repo + "#" + number);
-        Board.update(config, prs -> prs.stream().map(x -> x.key().equals(p.pr().key()) ? x.withCi("PENDING") : x).toList());
-        return Board.MAPPER.createObjectNode().put("approved", runs.size());
+        return runs.size();
     }
 
     /** Re-runs the failed jobs of each failed GitHub Actions run on the PR's head, as the GitHub elf's Retry does. */
@@ -112,15 +119,29 @@ final class Actions {
         ObjectNode ci = gh.ci(number);
         if (!ci.path("canRerun").asBoolean()) throw new IllegalStateException("You don't have write access to " + repo + ", which GitHub needs to re-run its workflows.");
         if (ci.path("runs").isEmpty()) throw new IllegalStateException("Nothing to re-run: the failed checks aren't GitHub Actions jobs.");
+        int n = rerun(gh, repo, ci);
+        System.out.println("Re-ran the failed jobs of " + n + " workflow run(s) on " + repo + "#" + number);
+        Board.update(config, prs -> prs.stream().map(x -> x.key().equals(p.pr().key()) ? x.withCi("PENDING") : x).toList());
+        return Board.MAPPER.createObjectNode().put("rerun", n);
+    }
+
+    /** The elf's own retry: re-runs what it can of the failed CI. 0 when nothing can be (not Actions, no write access). */
+    static int rerunFailed(GitHub gh, String repo, int number) throws IOException {
+        ObjectNode ci = gh.ci(number);
+        return ci.path("canRerun").asBoolean() ? rerun(gh, repo, ci) : 0;
+    }
+
+    private static int rerun(GitHub gh, String repo, ObjectNode ci) throws IOException {
         for (JsonNode run : ci.path("runs")) {
             gh.write("POST", "/repos/" + repo + "/actions/runs/" + run.asLong() + "/rerun-failed-jobs", Board.MAPPER.createObjectNode());
         }
-        System.out.println("Re-ran the failed jobs of " + ci.path("runs").size() + " workflow run(s) on " + repo + "#" + number);
-        Board.update(config, prs -> prs.stream().map(x -> x.key().equals(p.pr().key()) ? x.withCi("PENDING") : x).toList());
-        return Board.MAPPER.createObjectNode().put("rerun", ci.path("runs").size());
+        return ci.path("runs").size();
     }
 
-    /** Merge: at the head you saw, with CI green. When the repo wants a review, you approve it first, at that head. */
+    /**
+     * Merge: at the head you saw, with CI green, or failing only checks the repo doesn't require (Merge anyway). When
+     * the repo wants a review, you approve it first, at that head.
+     */
     static ObjectNode merge(Config config, GitHub gh, String repo, int number, String headSha) throws IOException {
         if (!GitHub.SHA.matcher(headSha).matches()) throw new IllegalArgumentException("Merge needs the head you saw");
         Pull p = pull(gh, repo, number);
@@ -128,15 +149,16 @@ final class Actions {
             throw new IllegalStateException(p.pr().key() + " changed since you saw it. Look at it again, or queue it to merge.");
         }
         if (Bumps.behind(p.pr()) || Bumps.conflicts(p.pr())) {
-            throw new IllegalStateException(p.pr().key() + " is behind its base. Queue to merge rebases it first, then merges it.");
+            throw new IllegalStateException(p.pr().key() + " is behind its base. The elf asks Dependabot to rebase it at its next refresh.");
         }
         if (Bumps.greenButReview(p.pr()) && !approvedAt(gh, number, headSha, config.githubUser)) approve(gh, p.pr());
-        else if (!Bumps.green(p.pr())) {
-            throw new IllegalStateException("CI on " + p.pr().key() + " isn't green" + (p.pr().ci() == null ? "" : " (" + p.pr().ci().toLowerCase() + ")")
-                    + ". Queue to merge merges it once it is.");
+        else if (!Bumps.green(p.pr()) && !"UNSTABLE".equals(p.pr().mergeState())) {
+            throw new IllegalStateException("GitHub doesn't let " + p.pr().key() + " merge yet" + (p.pr().ci() == null ? "" : " (CI " + p.pr().ci().toLowerCase() + ")")
+                    + ". The elf gets it ready at its next refresh.");
         }
         ObjectNode done = mergeNow(config, gh, p.repository(), p.pr(), false);
-        // A merge in that branch: the queue's next bump there is behind now. Moved on at once.
+        // A merge in that branch: the queue's next bump there is behind now. Moved on at once. The other bumps there are
+        // rebased at the next refresh, once GitHub has worked out that they're behind.
         MergeQueue.advance(config);
         Board.rejoin(config);
         return done;
@@ -185,24 +207,37 @@ final class Actions {
         return MergeQueue.answer(items);
     }
 
-    /** Every ready bump on the board (green, behind or with CI running; not major), queued in the board's order. */
-    static ObjectNode queueReady(Config config) throws IOException {
+    /**
+     * Merge all: every bump the safety check said is safe and nothing waits on you for, into the merge queue in the
+     * order Dependabot opened them. The queue merges them one at a time per repo and branch, rebasing each after the
+     * merge before it.
+     */
+    static ObjectNode mergeAll(Config config) throws IOException {
         Board.View v = Board.read(config.boardPath());
         if (v == null) throw new IllegalStateException("Refresh first: there's no board yet.");
         List<Bumps.Pr> ready = new ArrayList<>();
-        // Oldest first: they've waited longest, and Dependabot opened them in that order.
         v.rows().stream().filter(r -> r.flow().ready()).map(Board.Row::pr)
                 .sorted(java.util.Comparator.comparing(Bumps.Pr::createdAt, java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())))
                 .forEach(ready::add);
-        if (ready.isEmpty()) throw new IllegalStateException("No bump is ready to queue.");
+        if (ready.isEmpty()) throw new IllegalStateException("No bump is checked safe and ready to merge.");
         List<MergeQueue.Item> items = MergeQueue.locked(config, () -> {
             MergeQueue.add(config, ready);
             MergeQueue.advanceUnlocked(config);
             return MergeQueue.all(config);
         });
-        System.out.println("Queued " + ready.size() + " bump(s) to merge");
+        System.out.println("Merge all: queued " + ready.size() + " bump(s)");
         Board.rejoin(config);
         return MergeQueue.answer(items).put("added", ready.size());
+    }
+
+    /** Check again: the safety check, asked again now (it doesn't write to GitHub). */
+    static ObjectNode recheck(Config config, GitHub gh, String repo, int number) throws IOException {
+        Pull p = pull(gh, repo, number);
+        SafetyCheck.Check c = SafetyCheck.ask(gh, p.pr());
+        if (c == null) throw new IllegalStateException("The coding agent didn't give a verdict. Try again later.");
+        SafetyCheck.put(config, p.pr().key(), c);
+        Board.rejoin(config);
+        return Board.MAPPER.createObjectNode().put("verdict", c.verdict()).put("reason", c.reason());
     }
 
     static ObjectNode unqueue(Config config, String key) throws IOException {
