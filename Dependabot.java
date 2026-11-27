@@ -3,7 +3,7 @@
 //DEPS info.picocli:picocli:4.7.6
 //DEPS com.fasterxml.jackson.core:jackson-databind:2.17.2
 //DEPS com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.17.2
-//SOURCES Config.java Exec.java GitHub.java Bumps.java Flows.java MergeQueue.java Board.java Actions.java MvnpmElf.java Tend.java SafetyCheck.java Claude.java
+//SOURCES Config.java Exec.java GitHub.java Bumps.java Flows.java MergeQueue.java Board.java Actions.java MvnpmElf.java Tend.java SafetyCheck.java Claude.java Later.java
 
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -20,7 +20,7 @@ import java.util.concurrent.Callable;
  *
  * The mvnpm elf's bumps (org.mvnpm in its repos) stay on its tab: it builds and tests them before you merge.
  */
-@Command(name = "dependabot", mixinStandardHelpOptions = true, version = "1.2.0",
+@Command(name = "dependabot", mixinStandardHelpOptions = true, version = "1.2.1",
         description = "Dependabot's PRs on a tab of their own, each made ready to merge, and a merge queue for Merge all.")
 public class Dependabot implements Callable<Integer> {
 

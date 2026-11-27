@@ -1,7 +1,7 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run the Dependabot elf.
 name: dependabot
 title: Dependabot
-version: 1.2.0
+version: 1.2.1
 author: "@phillip-kruger"
 description: Dependabot's PRs in the repos you list, on a tab of their own instead of the GitHub board, each made ready to merge by itself. It asks Dependabot to rebase a bump that a merge put behind, retries failing CI, and has a coding agent check that the bump is safe. You click Merge, or Merge all.
 main: Dependabot.java

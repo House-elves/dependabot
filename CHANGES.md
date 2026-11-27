@@ -3,6 +3,10 @@
 What changed for you in each version of the Dependabot elf, newest first. The desk shows the parts that are new when
 it offers you an update.
 
+## 1.2.1
+
+- Fixed: 1.2.0 didn't start ("cannot find symbol: Later"). Its new Later file wasn't in the list of files the elf is built from.
+
 ## 1.2.0
 
 - New: **Later**. The zz under a row's icon puts a bump that's ready or needs you aside, under a folded Later section,
