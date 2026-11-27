@@ -81,7 +81,7 @@ class TendTest {
         assertTrue(SafetyCheck.changesWorkflows(moved));
 
         Bumps.Pr pr = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
-        SafetyCheck.Check before = new SafetyCheck.Check(pr.title(), "safe", "A patch.", Prs.NOW, null);
+        SafetyCheck.Check before = new SafetyCheck.Check(pr.title(), "safe", "A patch.", Prs.NOW, null, null);
         assertNull(SafetyCheck.current(java.util.Map.of(pr.key(), before), pr));
         assertEquals(before.withWorkflows(false), SafetyCheck.current(java.util.Map.of(pr.key(), before.withWorkflows(false)), pr));
     }

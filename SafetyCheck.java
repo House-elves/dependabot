@@ -30,20 +30,23 @@ final class SafetyCheck {
 
     static final String SAFE = "safe", CAREFUL = "careful";
 
-    /** The agent's word on a bump at this title. */
     /**
+     * The agent's word on a bump at this title.
+     *
      * @param workflows the bump changes .github/workflows or .github/actions; null in checks made before 1.1.1,
      *                  which are asked again
+     * @param looked an agent looked in the project's code ({@link Look}), not only at the release notes; null or false
+     *               for the safety check's own word
      */
-    record Check(String title, String verdict, String reason, Instant at, Boolean workflows) {
+    record Check(String title, String verdict, String reason, Instant at, Boolean workflows, Boolean looked) {
 
         Check(String title, String verdict, String reason, Instant at) {
-            this(title, verdict, reason, at, false);
+            this(title, verdict, reason, at, false, false);
         }
 
         boolean safe() { return SAFE.equals(verdict); }
 
-        Check withWorkflows(boolean w) { return new Check(title, verdict, reason, at, w); }
+        Check withWorkflows(boolean w) { return new Check(title, verdict, reason, at, w, looked); }
     }
 
     /** The check for the bump as it is, or null when it wasn't checked at this version. */

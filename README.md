@@ -14,6 +14,10 @@ you click **Merge**, or **Merge all**. It never merges by itself.
   fix on the base. Failing after that, it's yours.
 - A coding agent reads the bump's release notes, changelog and diff, and says whether it's safe to merge once CI passes
   or that you should look first, and why. Once per bump and version.
+- When it says to look first, **Have the agent look** (on the row, or for all of them at the top) has an agent look
+  in the bump's code instead of you: a checkout of the PR, read-only (Read, Grep and Glob, no shell or web), after
+  the runner checked the release notes it reads for prompt injection. It finds where the project uses the dependency
+  and whether it uses what changed, and its verdict replaces the check's.
 - CI waiting for approval (a run held for a maintainer): it approves the runs, as you, only once the check said the
   bump is safe. When the check says to look first, approving is yours. A run held at a deployment environment, and a
   bump that changes `.github/workflows` or `.github/actions` (GitHub Actions bumps), are always yours to approve:

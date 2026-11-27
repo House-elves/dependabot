@@ -34,8 +34,15 @@ final class Board {
 
     private Board() {}
 
-    /** One bump: the PR, what it bumps (null if the title isn't one bump), the safety check, where it is, its queue entry. */
-    record Row(Bumps.Pr pr, Bumps.Bump bump, SafetyCheck.Check check, Flows.Flow flow, MergeQueue.Item queued) {
+    /**
+     * One bump: the PR, what it bumps (null if the title isn't one bump), the safety check, where it is, its queue
+     * entry, and whether an agent is looking in its code now ({@link Look}).
+     */
+    record Row(Bumps.Pr pr, Bumps.Bump bump, SafetyCheck.Check check, Flows.Flow flow, MergeQueue.Item queued, boolean looking) {
+
+        Row(Bumps.Pr pr, Bumps.Bump bump, SafetyCheck.Check check, Flows.Flow flow, MergeQueue.Item queued) {
+            this(pr, bump, check, flow, queued, false);
+        }
     }
 
     /**
@@ -173,8 +180,14 @@ final class Board {
     }
 
     static View build(Config config, Instant fetchedAt, List<Bumps.Pr> prs, List<String> errors) {
-        return build(config.githubUser, fetchedAt, config.repos, prs, MergeQueue.all(config), MergeQueue.rebasing(config),
-                MergeQueue.merged(config), Tend.retries(config), SafetyCheck.all(config), Later.all(config), errors, Instant.now());
+        Instant now = Instant.now();
+        View v = build(config.githubUser, fetchedAt, config.repos, prs, MergeQueue.all(config), MergeQueue.rebasing(config),
+                MergeQueue.merged(config), Tend.retries(config), SafetyCheck.all(config), Later.all(config), errors, now);
+        Map<String, String> looking = Look.busy(config, now);
+        if (looking.isEmpty()) return v;
+        List<Row> rows = v.rows().stream().map(r -> looking.containsKey(r.pr().key())
+                ? new Row(r.pr(), r.bump(), r.check(), r.flow(), r.queued(), true) : r).toList();
+        return new View(v.login(), v.fetchedAt(), v.repos(), rows, v.queue(), v.merged(), v.errors());
     }
 
     static View build(String login, Instant fetchedAt, List<String> repos, List<Bumps.Pr> prs, List<MergeQueue.Item> queue,

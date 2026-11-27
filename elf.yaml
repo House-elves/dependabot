@@ -1,7 +1,7 @@
 # A House Elves elf: what Elf Desk needs to install, set up and run the Dependabot elf.
 name: dependabot
 title: Dependabot
-version: 1.2.1
+version: 1.3.0
 author: "@phillip-kruger"
 description: Dependabot's PRs in the repos you list, on a tab of their own instead of the GitHub board, each made ready to merge by itself. It asks Dependabot to rebase a bump that a merge put behind, retries failing CI, and has a coding agent check that the bump is safe. You click Merge, or Merge all.
 main: Dependabot.java
@@ -13,6 +13,7 @@ ai: [ask]
 reads:
   - The open Dependabot PRs in the repos you list, with their CI, reviews and merge state, through gh as your account. The mvnpm elf's bumps (org.mvnpm, in the repos it checks) are left to it.
   - Each bump's description (Dependabot's release notes and changelog) and diff, which it gives the coding agent for the safety check, once per bump and version.
+  - When you click Have the agent look (one bump, or all that say to look first), the bump's code: the runner checks its release notes for prompt injection, then starts Claude Code in a checkout of the PR, read-only (Read, Grep and Glob, no shell or web), to find out whether what changed touches this project. Its verdict replaces the safety check's.
 writes:
   - Its board, its merge queue, the rebases and retries it asked for, the safety checks and what merged lately, in ~/.config/dependabot/.
   - On GitHub, as your account, by itself at its refresh (every 10 minutes on weekdays) - the comment "@dependabot rebase" on a bump that's behind its base or in conflict (once per head); for a bump whose CI fails, re-running its failed jobs once, then that comment once; and approving the CI runs held for a maintainer on a bump, only once the safety check said it's safe (never a run held at a deployment environment, nor a bump that changes the workflows, such as a GitHub Actions bump). Nothing else without your click, and it never merges by itself.
@@ -50,6 +51,10 @@ refresh:
   command: board
   schedule: "Mon..Fri *-*-* 7..19:00; Mon..Fri *-*-* 7..18:10; Mon..Fri *-*-* 7..18:20; Mon..Fri *-*-* 7..18:30; Mon..Fri *-*-* 7..18:40; Mon..Fri *-*-* 7..18:50"
 data: [board, state]
+
+# Have the agent look starts a read-only agent in the bump's checkout; the runner calls look-done when it ends.
+agents:
+  done: look-done
 
 # A PR is owner/repo and its number. Each write waits for your click in the desk's bar.
 actions:
@@ -131,6 +136,23 @@ actions:
     params:
       repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
       pr: {kind: int}
+  look:
+    label: Have the agent look in the code
+    args: [--action=look]
+    ask: false
+    params:
+      repo: {pattern: '[A-Za-z0-9-]+/[A-Za-z0-9._-]+', max: 200}
+      pr: {kind: int}
+  look-all:
+    label: Have the agent look at every bump that says to look first
+    args: [--action=look-all]
+    ask: false
+  look-done:
+    label: Keep what the agent found
+    args: [--action=look-done]
+    ask: false
+    params:
+      id: {pattern: 'look-[0-9]{13}', max: 20}
   close:
     label: Close a PR without merging it
     args: [--action=close]

@@ -30,12 +30,18 @@ final class Actions {
                 case "unqueue" -> unqueue(config, key(config, values));
                 case "later" -> later(config, values, true);
                 case "now" -> later(config, values, false);
+                case "look-all" -> {
+                    ObjectNode started = Look.next(config, List.of());
+                    if (started == null) throw new IllegalStateException("No bump says to look first that the agent didn't look at yet.");
+                    yield started;
+                }
+                case "look-done" -> Look.done(config, values.path("id").asText(""));
                 default -> {
                     String repo = repo(config, values);
                     int number = number(values);
                     GitHub gh = new GitHub(config, repo);
                     // Doing anything with a bump put aside (but reading its CI) brings it back.
-                    if (!action.equals("ci-report")) Later.put(config, repo + "#" + number, null);
+                    if (!action.equals("ci-report") && !action.equals("look")) Later.put(config, repo + "#" + number, null);
                     yield switch (action) {
                         case "approve-ci" -> approveCi(config, gh, repo, number);
                         case "ci-report" -> {
@@ -48,6 +54,7 @@ final class Actions {
                         case "dependabot-rebase" -> rebase(config, gh, repo, number);
                         case "close" -> close(config, gh, repo, number);
                         case "recheck" -> recheck(config, gh, repo, number);
+                        case "look" -> Look.one(config, repo, number);
                         default -> throw new IllegalArgumentException("Not one of the Dependabot elf's actions: " + action);
                     };
                 }

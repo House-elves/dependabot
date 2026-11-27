@@ -3,6 +3,15 @@
 What changed for you in each version of the Dependabot elf, newest first. The desk shows the parts that are new when
 it offers you an update.
 
+## 1.3.0
+
+- New: **Have the agent look**. When the safety check says to look first, which it does whenever the release notes
+  are missing or mention a breaking change, an agent now looks in the bump's code instead of you: where the project
+  uses the dependency, and whether it uses what changed. It reads a checkout of the PR, read-only. Its verdict replaces
+  the safety check's, and the row says **Agent: safe** or **Agent: look first**, with what it found on hover.
+- It's the main button on each such row, and **Have the agent look at N bumps** at the top goes through them all,
+  one at a time. A bump the agent says is safe is ready to merge, and goes in Merge all.
+
 ## 1.2.1
 
 - Fixed: 1.2.0 didn't start ("cannot find symbol: Later"). Its new Later file wasn't in the list of files the elf is built from.

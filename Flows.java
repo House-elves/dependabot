@@ -38,7 +38,7 @@ final class Flows {
     }
 
     /**
-     * A step the tab knows how to take: merge, queue, unqueue, dependabot-rebase, approve-ci, recheck, close (the
+     * A step the tab knows how to take: merge, queue, unqueue, dependabot-rebase, approve-ci, recheck, look, close (the
      * elf's actions); checks (its CI on GitHub), github (the PR on GitHub).
      */
     record Next(String id, String label) {
@@ -51,6 +51,7 @@ final class Flows {
     static final Next REBASE = new Next("dependabot-rebase", "Ask Dependabot to rebase");
     static final Next APPROVE_CI = new Next("approve-ci", "Approve CI run");
     static final Next RECHECK = new Next("recheck", "Check again");
+    static final Next LOOK = new Next("look", "Have the agent look");
     static final Next CLOSE = new Next("close", "Close");
     static final Next CHECKS = new Next("checks", "See CI on GitHub");
     static final Next GITHUB = new Next("github", "On GitHub");
@@ -127,11 +128,9 @@ final class Flows {
             // Approved by the elf only once the safety check says safe, and never when it changes the workflows.
             SafetyCheck.Check check = c.check();
             if (Bumps.touchesWorkflows(i, check)) {
-                String said = check == null ? "" : check.safe() ? " The safety check says safe"
-                        + (check.reason() == null ? "." : ": " + check.reason()) : " The safety check says to look first"
-                        + (check.reason() == null ? "." : ": " + check.reason());
+                String said = check == null ? "" : " " + said(check);
                 return flow(1, YOU, i.updatedAt(), "CI waits for your approval: the bump changes the workflows that run."
-                        + said, APPROVE_CI, check == null ? List.of(CLOSE) : List.of(RECHECK, CLOSE));
+                        + said, APPROVE_CI, check == null ? List.of(CLOSE) : check.safe() ? List.of(RECHECK, CLOSE) : lookOrRecheck(check));
             }
             if (check == null) {
                 return flow(1, ELF, i.updatedAt(), "CI waits for approval: the elf approves it once the safety check says safe.",
@@ -141,8 +140,10 @@ final class Flows {
                 return flow(1, ELF, i.updatedAt(), "CI waits for approval: the safety check says safe, so the elf approves it.",
                         null, List.of(CLOSE));
             }
-            return flow(1, YOU, check.at(), "CI waits for your approval. The safety check says to look first"
-                    + (check.reason() == null ? "." : ": " + check.reason()), APPROVE_CI, List.of(RECHECK, CLOSE));
+            if (!looked(check)) {
+                return flow(1, YOU, check.at(), "CI waits for approval. " + said(check), LOOK, List.of(APPROVE_CI, RECHECK, CLOSE));
+            }
+            return flow(1, YOU, check.at(), "CI waits for your approval. " + said(check), APPROVE_CI, List.of(RECHECK, CLOSE));
         }
         if (Bumps.ciFailing(i)) {
             if (Tend.gaveUp(i, c.retry())) {
@@ -163,14 +164,28 @@ final class Flows {
                 return flow(2, ELF, i.updatedAt(), "CI passed. Waiting for the safety check.", null, List.of(MERGE, CLOSE));
             }
             if (!check.safe()) {
-                return flow(2, YOU, check.at(), "CI passed. The safety check says to look first"
-                        + (check.reason() == null ? "." : ": " + check.reason()) + review, MERGE, List.of(RECHECK, CLOSE));
+                if (!looked(check)) return flow(2, YOU, check.at(), "CI passed. " + said(check) + review, LOOK, List.of(MERGE, RECHECK, CLOSE));
+                return flow(2, YOU, check.at(), "CI passed. " + said(check) + review, MERGE, List.of(RECHECK, CLOSE));
             }
             String major = bump != null && bump.major() ? " A major bump." : "";
-            return flow(3, READY, check.at(), "CI passed and the safety check says it's safe"
-                    + (check.reason() == null ? "." : ": " + check.reason()) + major + review, MERGE, List.of(CLOSE));
+            return flow(3, READY, check.at(), "CI passed and " + Character.toLowerCase(said(check).charAt(0)) + said(check).substring(1)
+                    + major + review, MERGE, List.of(CLOSE));
         }
         return flow(1, YOU, i.updatedAt(), "GitHub doesn't let it merge yet (" + lower(i.mergeState()) + ").", GITHUB, List.of(CLOSE));
+    }
+
+    static boolean looked(SafetyCheck.Check c) {
+        return Boolean.TRUE.equals(c.looked());
+    }
+
+    /** "The safety check says to look first: …", or the agent's word once it looked in the code. */
+    static String said(SafetyCheck.Check c) {
+        String who = looked(c) ? "The agent looked in the code and says" : "The safety check says";
+        return who + (c.safe() ? " it's safe" : " to look first") + (c.reason() == null ? "." : ": " + c.reason());
+    }
+
+    private static List<Next> lookOrRecheck(SafetyCheck.Check c) {
+        return looked(c) ? List.of(RECHECK, CLOSE) : List.of(LOOK, RECHECK, CLOSE);
     }
 
     private static Flow flow(int step, String waiting, Instant since, String say, Next next, List<Next> more) {

@@ -42,9 +42,25 @@ class FlowsTest {
         Bumps.Pr pr = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
         Flows.Flow f = flow(pr, new SafetyCheck.Check(pr.title(), "careful", "Drops Java 17.", Prs.NOW));
         assertEquals(Flows.YOU, f.waiting());
-        assertEquals("merge", f.next().id());
+        // The agent looks in the code first; Merge is still there.
+        assertEquals("look", f.next().id());
+        assertTrue(f.more().stream().anyMatch(n -> n.id().equals("merge")));
         assertFalse(f.ready());
         assertTrue(f.say().contains("Drops Java 17"), f.say());
+    }
+
+    @Test
+    void onceTheAgentLookedItsWordStands() {
+        Bumps.Pr pr = Prs.pr("SUCCESS", "CLEAN", "MERGEABLE");
+        Flows.Flow careful = flow(pr, new SafetyCheck.Check(pr.title(), "careful", "Uses the removed API in Foo.java.", Prs.NOW, false, true));
+        assertEquals(Flows.YOU, careful.waiting());
+        assertEquals("merge", careful.next().id());
+        assertTrue(careful.more().stream().noneMatch(n -> n.id().equals("look")));
+        assertTrue(careful.say().contains("agent looked in the code"), careful.say());
+        Flows.Flow safe = flow(pr, new SafetyCheck.Check(pr.title(), "safe", "Not used outside tests.", Prs.NOW, false, true));
+        assertEquals(Flows.READY, safe.waiting());
+        assertTrue(safe.ready());
+        assertTrue(safe.say().startsWith("CI passed and the agent looked in the code and says it's safe"), safe.say());
     }
 
     @Test
@@ -84,7 +100,9 @@ class FlowsTest {
         assertEquals(Flows.ELF, flow(pr, null).waiting());
         Flows.Flow f = flow(pr, new SafetyCheck.Check(pr.title(), "careful", "Drops Java 17.", Prs.NOW));
         assertEquals(Flows.YOU, f.waiting());
-        assertEquals("approve-ci", f.next().id());
+        assertEquals("look", f.next().id());
+        Flows.Flow looked = flow(pr, new SafetyCheck.Check(pr.title(), "careful", "Uses it.", Prs.NOW, false, true));
+        assertEquals("approve-ci", looked.next().id());
     }
 
     @Test

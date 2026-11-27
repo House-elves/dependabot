@@ -71,13 +71,21 @@ function bumpChip(row) {
         ${name} <span class="from">${b.from}</span> → <b>${b.to}</b></span>${b.kind === 'major' ? html` <span class="chip warn">Major</span>` : ''}`;
 }
 
-/** The safety check's verdict, its reason on hover. */
+/** The safety check's verdict, or the agent's once it looked in the code, its reason on hover. */
 function checkChip(row) {
     const c = row.check;
+    if (row.looking) return html`<span class="chip run" title="An agent reads the bump's code, read-only, to settle the safety check's word">${spinner}Agent looking</span>`;
     if (!c) return '';
+    const by = c.looked ? 'The agent looked in the code: ' : '';
     return c.verdict === 'safe'
-        ? html`<span class="chip ok" title=${c.reason ?? ''}>Checked safe</span>`
-        : html`<span class="chip warn" title=${c.reason ?? ''}>Look first</span>`;
+        ? html`<span class="chip ok" title=${by + (c.reason ?? '')}>${c.looked ? 'Agent: safe' : 'Checked safe'}</span>`
+        : html`<span class="chip warn" title=${by + (c.reason ?? '')}>${c.looked ? 'Agent: look first' : 'Look first'}</span>`;
+}
+
+/** Bumps that say to look first and no agent looked at yet: what Look at all goes through. */
+function toLook(rows) {
+    return rows.filter(r => r.check && r.check.verdict !== 'safe' && !r.check.looked && !r.looking
+        && !r.pr.draft && r.flow.waiting !== 'queue');
 }
 
 /** "into 2.x" when it doesn't go into the repo's default branch. */
@@ -230,6 +238,20 @@ class DependabotTab extends LitElement {
         return (this._board?.rows ?? []).filter(r => r.flow.ready);
     }
 
+    /** Look at all: the agent looks at each bump that says to look first, one at a time, by itself. */
+    async _lookAll() {
+        this._doing = 'look-all';
+        this._error = null;
+        try {
+            await elf.act('look-all', {});
+            await this._load();
+        } catch (e) {
+            if (!e.cancelled) this._error = `Have the agent look: ${e.message}`;
+        } finally {
+            this._doing = null;
+        }
+    }
+
     async _mergeAll() {
         const n = this._ready.length;
         this._doing = 'merge-all';
@@ -281,6 +303,8 @@ class DependabotTab extends LitElement {
     _bar() {
         const failed = !this._state?.running?.board && this._state?.failed?.board;
         const n = this._ready.length;
+        const rows = this._board?.rows ?? [];
+        const look = toLook(rows).length, looking = rows.some(r => r.looking);
         return html`
             <div class="bar">
                 <button ?disabled=${this._refreshing} @click=${() => this._refresh()}>
@@ -288,6 +312,10 @@ class DependabotTab extends LitElement {
                 ${n ? html`<button class="primary" ?disabled=${this._doing !== null}
                     title="Every bump the safety check said is safe, into the merge queue: it merges them one at a time per repo and branch, rebasing each after the merge before it and waiting for its CI"
                     @click=${() => this._mergeAll()}>${this._doing === 'merge-all' ? spinner : ''}Merge all ${n}</button>` : ''}
+                ${look && !looking ? html`<button ?disabled=${this._doing !== null}
+                    title="An agent reads each bump that says to look first in its code, read-only, one at a time, and settles whether it's safe"
+                    @click=${() => this._lookAll()}>${this._doing === 'look-all' ? spinner : ''}Have the agent look at ${count(look, 'bump')}</button>` : ''}
+                ${looking ? html`<span class="note">${spinner} The agent is looking${look ? html`, ${look} more to go` : ''}.</span>` : ''}
             </div>
             ${failed ? html`<div class="failed" role="alert">
                 <p class="error">The last refresh failed. The end of its log:</p><pre>${failed}</pre></div>` : ''}`;
@@ -486,6 +514,7 @@ class DependabotTab extends LitElement {
             case 'checks':
                 return html`<a class="btn ${cls}" href="${pr.url}/checks" target="_blank" rel="noopener">${n.label}</a>`;
             default: {
+                if (n.id === 'look' && row.looking) return '';
                 const busy = this._doing === `${key(pr)} ${n.id}`;
                 return html`<button class=${cls} ?disabled=${this._doing !== null} @click=${() => this._step(row, n)}>
                     ${busy ? spinner : ''}${n.label}</button>`;
